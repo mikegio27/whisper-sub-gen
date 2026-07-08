@@ -18,12 +18,34 @@ logging.basicConfig(
 )
 
 
+class _QuietProbes(logging.Filter):
+    """Keep k8s probe and scrape spam out of the access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/healthz" not in msg and "/metrics" not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietProbes())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     metrics.QUEUE_LENGTH.set_function(lambda: worker.status()["queue_length"])
+    metrics.PROCESSING.set_function(
+        lambda: 1 if worker.transcriber.progress.snapshot()["path"] else 0
+    )
+    metrics.CURRENT_PROGRESS.set_function(
+        lambda: worker.transcriber.progress.snapshot()["percent"]
+    )
     worker.start()
     yield
     worker.stop()
+    # abort: the active job notices the cancel flag within a few segments.
+    # finish: block until the file completes — the pod's grace period
+    # (SIGKILL) is the hard ceiling.
+    worker.join(timeout=60 if settings.shutdown_mode == "abort" else None)
+    logging.getLogger(__name__).info("shutdown complete")
 
 
 app = FastAPI(

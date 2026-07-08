@@ -10,3 +10,8 @@ MEDIA_SECONDS = Counter(
     "subgen_media_seconds_total", "Seconds of media transcribed"
 )
 QUEUE_LENGTH = Gauge("subgen_queue_length", "Files currently waiting in the queue")
+PROCESSING = Gauge("subgen_processing", "1 while a file is being transcribed")
+CURRENT_PROGRESS = Gauge(
+    "subgen_current_file_progress_percent",
+    "Progress through the file currently being transcribed",
+)

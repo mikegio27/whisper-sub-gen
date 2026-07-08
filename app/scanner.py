@@ -39,7 +39,19 @@ def find_videos(roots: list[str] | None = None) -> list[Path]:
             log.warning("media dir %s does not exist or is not mounted", root)
             continue
         for path in base.rglob("*"):
-            if not path.is_file() or path.suffix.lstrip(".").lower() not in exts:
+            if not path.is_file():
+                continue
+            # Leftover partial from a hard kill (an active job touches its
+            # .part constantly, so a stale mtime means it's orphaned).
+            if path.name.endswith(".srt.part"):
+                try:
+                    if now - path.stat().st_mtime > 3600:
+                        path.unlink()
+                        log.info("removed stale partial %s", path)
+                except OSError:
+                    pass
+                continue
+            if path.suffix.lstrip(".").lower() not in exts:
                 continue
             if _ignored(path):
                 continue

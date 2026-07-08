@@ -17,7 +17,7 @@ from . import metrics
 from .config import in_work_window, settings
 from .scanner import check_needs_subtitles, find_videos
 from .state import StateStore
-from .transcriber import Transcriber
+from .transcriber import Transcriber, TranscriptionCancelled
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +68,31 @@ class Worker:
         )
 
     def stop(self) -> None:
+        """Begin shutdown. abort: cancel the active job and clean up its
+        partial output; finish: let the active job complete. Queued jobs are
+        dropped either way — the next scan re-finds them."""
         self._stop.set()
         self._scan_now.set()
+        if settings.shutdown_mode == "abort":
+            self.transcriber.cancel.set()
+        with self._lock:
+            active = self._current
+        if active:
+            log.info(
+                "shutdown: %s active job %s (%d queued jobs dropped, "
+                "re-queued on next scan)",
+                "aborting" if settings.shutdown_mode == "abort" else "finishing",
+                active.path.name,
+                self._queue.qsize(),
+            )
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the worker thread to finish the current job and exit."""
+        for t in self._threads:
+            if t.name == "worker":
+                t.join(timeout)
+                if t.is_alive():
+                    log.warning("worker did not stop within %ss", timeout)
 
     # --- public API used by routes ---
 
@@ -235,9 +258,17 @@ class Worker:
                 self.store.record(str(video), st.st_size, st.st_mtime, "skipped", reason=reason)
                 return
 
-        log.info("processing %s (job %d, via %s)", video, job.id, job.source)
+        log.info(
+            "processing %s (job %d, via %s, %d more queued)",
+            video, job.id, job.source, self._queue.qsize(),
+        )
         try:
             result = self.transcriber.transcribe(video)
+        except TranscriptionCancelled:
+            # Shutdown abort: partial output already cleaned up. Leave no
+            # state record so the file is picked up again after restart.
+            log.info("job %d aborted by shutdown: %s", job.id, video.name)
+            return
         except Exception as exc:
             log.exception("transcription failed for %s", video)
             self.store.record(
@@ -257,6 +288,10 @@ class Worker:
         )
         metrics.PROCESSED.inc()
         metrics.MEDIA_SECONDS.inc(result["duration_s"])
+        log.info(
+            "job %d done: %s [%s] — %d files left in queue",
+            job.id, video.name, result["language"], self._queue.qsize(),
+        )
         self._notify({"status": "done", "path": str(video), **result})
 
     def _notify(self, payload: dict) -> None:

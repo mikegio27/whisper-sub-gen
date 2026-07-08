@@ -73,6 +73,21 @@ class Settings(BaseSettings):
     state_dir: str = "/data"  # sqlite db + temp audio extractions
     webhook_url: str = ""  # POSTed a JSON result after each processed file
     log_level: str = "INFO"
+    # Log transcription progress (%, speed, ETA) every N seconds; 0 disables.
+    progress_log_seconds: int = 60
+    # On SIGTERM: "abort" cancels the active job and deletes its partial
+    # output (it is retried after restart); "finish" completes the active
+    # file first — make sure the pod's terminationGracePeriodSeconds is
+    # large enough to transcribe one full movie.
+    shutdown_mode: str = "abort"
+
+    @field_validator("shutdown_mode")
+    @classmethod
+    def _check_shutdown_mode(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("abort", "finish"):
+            raise ValueError("SHUTDOWN_MODE must be 'abort' or 'finish'")
+        return v
 
     @field_validator("run_mode")
     @classmethod

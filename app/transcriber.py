@@ -18,6 +18,10 @@ from .scanner import media_duration, output_path
 log = logging.getLogger(__name__)
 
 
+class TranscriptionCancelled(Exception):
+    """Raised inside the segment loop when a shutdown abort is requested."""
+
+
 @dataclass
 class Progress:
     """Shared with the API so /status can report live progress."""
@@ -86,6 +90,8 @@ class Transcriber:
         self._model = None
         self._model_lock = threading.Lock()
         self.progress = Progress()
+        # Set during shutdown (abort mode) to stop the active job cleanly.
+        self.cancel = threading.Event()
 
     @property
     def model_name(self) -> str:
@@ -156,26 +162,53 @@ class Transcriber:
             target = output_path(video, lang)
             tmp_target = target.with_suffix(target.suffix + ".part")
             count = 0
-            with open(tmp_target, "w", encoding="utf-8") as fh:
-                for seg in segments:  # generator — transcription happens here
-                    text = seg.text.strip()
-                    if not text:
-                        continue
-                    count += 1
-                    fh.write(
-                        f"{count}\n"
-                        f"{_format_ts(seg.start)} --> {_format_ts(seg.end)}\n"
-                        f"{text}\n\n"
-                    )
-                    with self.progress._lock:
-                        self.progress.transcribed_s = seg.end
-                        self.progress.segments = count
+            heartbeat = settings.progress_log_seconds
+            next_heartbeat = time.time() + heartbeat if heartbeat else math.inf
+            try:
+                with open(tmp_target, "w", encoding="utf-8") as fh:
+                    for seg in segments:  # generator — transcription happens here
+                        if self.cancel.is_set():
+                            raise TranscriptionCancelled(str(video))
+                        text = seg.text.strip()
+                        if not text:
+                            continue
+                        count += 1
+                        fh.write(
+                            f"{count}\n"
+                            f"{_format_ts(seg.start)} --> {_format_ts(seg.end)}\n"
+                            f"{text}\n\n"
+                        )
+                        with self.progress._lock:
+                            self.progress.transcribed_s = seg.end
+                            self.progress.segments = count
+                        now = time.time()
+                        if now >= next_heartbeat:
+                            next_heartbeat = now + heartbeat
+                            elapsed = now - started
+                            speed = seg.end / elapsed if elapsed else 0.0
+                            if duration and speed:
+                                pct = min(100.0, 100 * seg.end / duration)
+                                eta_min = (duration - seg.end) / speed / 60
+                                log.info(
+                                    "progress %s: %.0f%% (%.0f/%.0fs), "
+                                    "%.1fx realtime, ~%.1f min left",
+                                    video.name, pct, seg.end, duration, speed, eta_min,
+                                )
+                            else:
+                                log.info(
+                                    "progress %s: %.0fs transcribed, %.1fx realtime",
+                                    video.name, seg.end, speed,
+                                )
 
-            if count == 0:
+                if count == 0:
+                    raise RuntimeError("no speech detected — nothing to write")
+
+                tmp_target.rename(target)
+            except BaseException:
+                # Never leave a stale .part next to the media (cancel, error,
+                # or empty output alike).
                 tmp_target.unlink(missing_ok=True)
-                raise RuntimeError("no speech detected — nothing to write")
-
-            tmp_target.rename(target)
+                raise
             elapsed = time.time() - started
             speed = duration / elapsed if elapsed and duration else math.nan
             log.info(
@@ -199,3 +232,5 @@ class Transcriber:
             with self.progress._lock:
                 self.progress.path = ""
                 self.progress.started_at = 0.0
+                self.progress.duration_s = 0.0
+                self.progress.transcribed_s = 0.0

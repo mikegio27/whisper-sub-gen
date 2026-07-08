@@ -63,6 +63,8 @@ movie transcribes in a fraction of its runtime on a modern many-core CPU.
 | `MODEL_DIR` | `/models` | Model download cache (mount a volume!) |
 | `WEBHOOK_URL` | *(empty)* | POSTed a JSON summary after every processed file |
 | `LOG_LEVEL` | `INFO` | |
+| `PROGRESS_LOG_SECONDS` | `60` | Log transcription progress (%, speed, ETA) every N seconds; 0 disables |
+| `SHUTDOWN_MODE` | `abort` | On SIGTERM: `abort` cancels the active job and deletes its partial output (retried after restart); `finish` completes the active file first — size the pod's `terminationGracePeriodSeconds` to cover a full movie |
 
 ## API
 
@@ -87,6 +89,28 @@ curl -X POST http://whisper-sub-gen.whisper-sub-gen.svc.cluster.local:8000/proce
 The [Jellyfin Webhook plugin](https://github.com/jellyfin/jellyfin-plugin-webhook)
 "Item Added" notification pointed at `POST /scan` also works and needs no
 scripting.
+
+## Monitoring
+
+`GET /metrics` serves Prometheus metrics (no auth): counters
+`subgen_files_processed_total`, `subgen_files_failed_total`,
+`subgen_files_queued_total`, `subgen_scans_total`,
+`subgen_media_seconds_total`, and gauges `subgen_queue_length`,
+`subgen_processing`, `subgen_current_file_progress_percent`.
+
+On k8s, annotate the pod so your scraper picks it up:
+
+```yaml
+prometheus.io/scrape: "true"
+prometheus.io/port: "8000"
+prometheus.io/path: /metrics
+```
+
+Logs: each file logs a `processing ... (N more queued)` line on pickup, a
+progress heartbeat every `PROGRESS_LOG_SECONDS` with percent / speed / ETA,
+and a `job N done ... M files left in queue` line on completion. Probe spam
+(`/healthz`, `/metrics`) is filtered out of the access log. `GET /status`
+shows the current file with live percent at any time.
 
 ## Running standalone
 
