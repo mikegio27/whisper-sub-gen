@@ -1,0 +1,26 @@
+# Standalone deployment example. All settings are env vars — see README.
+services:
+  whisper-sub-gen:
+    build: .
+    image: ghcr.io/mikegio27/whisper-sub-gen:latest
+    container_name: whisper-sub-gen
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MEDIA_DIRS: /media
+      WHISPER_MODEL: large-v3-turbo
+      WHISPER_DEVICE: cpu
+      RUN_MODE: continuous
+      SCAN_INTERVAL_MINUTES: "60"
+      # Only transcribe between 10pm and 6am:
+      # WORK_WINDOW: "22:00-06:00"
+      # API_KEY: change-me
+    volumes:
+      - /path/to/your/media:/media
+      - models:/models
+      - state:/data
+
+volumes:
+  models:
+  state:
