@@ -93,3 +93,16 @@ scripting.
 ```bash
 docker compose up -d          # edit docker-compose.yml volumes first
 ```
+
+### Using the GPU instead
+
+CPU is the default and deliberately capped (`CPU_THREADS=12`) so transcodes
+aren't starved. If throughput on a big backlog matters, GPU is ~10x faster:
+
+1. Build with `--build-arg WITH_CUDA=true`.
+2. In the deployment: set `WHISPER_DEVICE=cuda`, add
+   `runtimeClassName: nvidia`, `nodeSelector: {gpu: "true"}` and
+   `resources.limits."nvidia.com/gpu": 1` (one of the four time-slices).
+
+A pragmatic pattern: run CPU day-to-day, switch to GPU temporarily for the
+initial library backfill.
