@@ -93,36 +93,3 @@ scripting.
 ```bash
 docker compose up -d          # edit docker-compose.yml volumes first
 ```
-
-## Deploying to k3s (homelab)
-
-Manifests in [`deploy/k8s/`](deploy/k8s/) follow the homelab conventions:
-media PV/PVC against `10.0.10.20:/mnt/tank/k3s/jellyfin-media` (same pattern
-as the arr suite), model/state on a `local-path` PVC, config via ConfigMap.
-
-1. Build & push (CI does this on push to main/tags, or use
-   `homelab/build-images.sh` with `REGISTRY=ghcr.io/mikegio27`).
-2. Copy `deploy/k8s/` to `homelab/apps/whisper-sub-gen/` and add
-   `whisper-sub-gen/` to `homelab/apps/kustomization.yaml`; Flux does the rest.
-3. Optional: enable `ingressroute.yaml` (Authentik-gated
-   `subgen.dozydelta.com`) — remember to add the namespace to the reflector
-   allow-list in `cert-manager/certificate.yaml`. In-cluster callers can just
-   use the Service directly.
-4. If you want an `API_KEY`, create it as a SealedSecret named
-   `whisper-sub-gen-secret` and uncomment the `secretRef` in the deployment.
-
-The container runs as uid 1000 and needs write access to the media export to
-drop `.srt` files (the NFS export already allows this for the arr apps).
-
-### Using the 4070S instead
-
-CPU is the default and deliberately capped (`CPU_THREADS=12`) so transcodes
-aren't starved. If throughput on a big backlog matters, GPU is ~10x faster:
-
-1. Build with `--build-arg WITH_CUDA=true`.
-2. In the deployment: set `WHISPER_DEVICE=cuda`, add
-   `runtimeClassName: nvidia`, `nodeSelector: {gpu: "true"}` and
-   `resources.limits."nvidia.com/gpu": 1` (one of the four time-slices).
-
-A pragmatic pattern: run CPU day-to-day, switch to GPU temporarily for the
-initial library backfill.
