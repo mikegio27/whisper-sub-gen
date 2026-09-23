@@ -14,7 +14,7 @@ Python 3.12) and only builds/pushes the images if it passes. Run the same gates 
 committing:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v   # stdlib unittest, ~45 tests, <1s
+.venv/bin/python -m unittest discover -s tests -v   # stdlib unittest, 44 tests, <1s
 ruff check . && ruff format --check .               # config in pyproject.toml; CI pins ruff==0.16.1
 ```
 

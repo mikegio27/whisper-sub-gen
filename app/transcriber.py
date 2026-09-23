@@ -56,6 +56,11 @@ def _format_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+# Extracting audio from even a long film takes well under a minute; this only
+# exists so a wedged ffmpeg (e.g. a stalled NFS read) can't hang the worker.
+EXTRACT_TIMEOUT_S = 1800
+
+
 def _extract_audio(video: Path, dest_dir: Path) -> Path:
     """ffmpeg fallback for containers PyAV chokes on: 16 kHz mono wav."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +77,13 @@ def _extract_audio(video: Path, dest_dir: Path) -> Path:
         str(wav),
     ]
     # fmt: on
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=EXTRACT_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired as exc:
+        wav.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg audio extraction timed out after {EXTRACT_TIMEOUT_S}s") from exc
     if result.returncode != 0:
         wav.unlink(missing_ok=True)
         raise RuntimeError(f"ffmpeg audio extraction failed: {result.stderr[:400]}")
