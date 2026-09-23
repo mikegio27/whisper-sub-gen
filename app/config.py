@@ -43,13 +43,37 @@ class Settings(BaseSettings):
     # Empty = auto-detect per file; otherwise ISO 639-1 like "en"
     language: str = ""
     task: str = "transcribe"  # transcribe | translate (translate => English)
-    vad_filter: bool = True  # skip long silences, big speedup on movies
+    # Silero VAD pre-filter. Off by default: on film audio it drops quiet or
+    # music-backed dialogue outright and garbles word timestamps at chunk
+    # boundaries. On a 4 min OotP clip (2026-09-22) it cut 2:45 of the 4:03,
+    # lost "Come on, Dudley, let's go. What's going on?" and smeared "What are
+    # you doing?" across 9 s; with it off, text and word times were right. It
+    # only buys speed, which the GPU makes moot. Silence hallucinations are
+    # handled by hallucination_silence_threshold + the cue composer instead.
+    vad_filter: bool = False
+    # Only used when vad_filter is on.
+    vad_threshold: float = 0.5
+    vad_min_silence_ms: int = 500
+    vad_speech_pad_ms: int = 200
+    # Feeding each window the previous text makes one hallucination repeat for
+    # minutes (the "Is she dead?" x3 loops). Off costs little on films.
+    condition_on_previous_text: bool = False
+    # Skip silent stretches longer than this (s) around a suspected
+    # hallucination. Needs word timestamps, which the pipeline always uses.
+    hallucination_silence_threshold: float = 2.0
+    # Keep only the center channel of 5.1/7.1 tracks (dialogue lives there),
+    # falling back to a downmix when it's silent. false = always downmix.
+    audio_center_channel: bool = True
     model_dir: str = "/models"  # HuggingFace download cache (mount a volume)
 
     # --- Output ---
     # Filename becomes "<video stem><subtitle_tag>.<lang>.srt"
     subtitle_tag: str = ""
     overwrite_existing_output: bool = False
+    # Re-generate subs this service wrote with an older pipeline version, but
+    # only while the file on disk is still exactly what we wrote (size+mtime),
+    # so a sub the owner replaced or edited is never touched.
+    regenerate_outdated: bool = False
 
     # --- Run mode & scheduling ---
     # continuous: scan every scan_interval_minutes and process

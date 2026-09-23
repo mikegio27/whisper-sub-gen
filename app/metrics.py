@@ -1,6 +1,6 @@
 """Prometheus counters exposed at /metrics."""
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 PROCESSED = Counter("subgen_files_processed_total", "Files successfully subtitled")
 FAILED = Counter("subgen_files_failed_total", "Files that failed transcription")
@@ -12,4 +12,9 @@ PROCESSING = Gauge("subgen_processing", "1 while a file is being transcribed")
 CURRENT_PROGRESS = Gauge(
     "subgen_current_file_progress_percent",
     "Progress through the file currently being transcribed",
+)
+QA_VIOLATIONS = Histogram(
+    "subgen_qa_violations_per_100_cues",
+    "Subtitle-standard violations per 100 cues in each written file (qa.score)",
+    buckets=(1, 2, 5, 10, 20, 40, 80, 160),
 )

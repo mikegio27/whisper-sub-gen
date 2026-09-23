@@ -132,12 +132,3 @@ def check_needs_subtitles(video: Path) -> tuple[bool, str]:
             return False, f"embedded subtitles present ({', '.join(sorted(langs))})"
 
     return True, ""
-
-
-def media_duration(video: Path) -> float:
-    try:
-        probe = ffprobe(video)
-        return float(probe.get("format", {}).get("duration", 0.0))
-    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, TypeError):
-        # ffprobe missing/failed/timed out, bad JSON, or a non-numeric duration.
-        return 0.0

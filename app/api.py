@@ -51,6 +51,11 @@ def _validate_media_path(raw: str) -> Path:
 
 @router.get("/healthz")
 def healthz() -> dict:
+    # A model that failed to load/run (e.g. CUDA vs host driver) makes every
+    # job fail; go unhealthy so it shows up as pod restarts, not as a library
+    # of "failed" files.
+    if worker.transcriber.load_error:
+        raise HTTPException(status_code=503, detail=worker.transcriber.load_error)
     return {"status": "ok"}
 
 

@@ -1,4 +1,3 @@
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +6,7 @@ from unittest import mock
 from app import scanner
 from app.config import settings
 from app.scanner import check_needs_subtitles, external_subtitles, output_path
-from app.transcriber import _extract_audio, _format_ts
+from app.srt import format_ts as _format_ts
 
 
 class FormatTsTest(unittest.TestCase):
@@ -26,16 +25,6 @@ class FormatTsTest(unittest.TestCase):
 
     def test_hours_beyond_99(self):
         self.assertEqual(_format_ts(100 * 3600), "100:00:00,000")
-
-
-class ExtractAudioTest(unittest.TestCase):
-    def test_timeout_cleans_up_and_raises(self):
-        with tempfile.TemporaryDirectory() as d:
-            timeout = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1)
-            with mock.patch("app.transcriber.subprocess.run", side_effect=timeout):
-                with self.assertRaisesRegex(RuntimeError, "timed out"):
-                    _extract_audio(Path(d) / "movie.mkv", Path(d) / "tmp")
-            self.assertEqual(list((Path(d) / "tmp").iterdir()), [])
 
 
 class SidecarTest(unittest.TestCase):

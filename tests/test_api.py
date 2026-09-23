@@ -18,7 +18,7 @@ settings.state_dir = _STATE.name
 
 from fastapi import HTTPException  # noqa: E402
 
-from app.api import _validate_media_path  # noqa: E402
+from app.api import _validate_media_path, healthz  # noqa: E402
 
 
 def tearDownModule():
@@ -76,6 +76,17 @@ class ValidateMediaPathTest(unittest.TestCase):
 
     def test_missing_inside_is_404(self):
         self.assertRejected(str(self.movies / "nope.mkv"), code=404)
+
+
+class HealthzTest(unittest.TestCase):
+    def test_ok_until_the_model_is_unusable(self):
+        from app.worker import worker
+
+        self.assertEqual(healthz(), {"status": "ok"})
+        with mock.patch.object(worker.transcriber, "load_error", "libcublas.so.12 not found"):
+            with self.assertRaises(HTTPException) as ctx:
+                healthz()
+        self.assertEqual(ctx.exception.status_code, 503)
 
 
 if __name__ == "__main__":

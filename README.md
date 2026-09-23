@@ -14,8 +14,8 @@ near-`large-v3` quality at ~6x the speed, which is the sweet spot for CPU-bound
 batch transcription. Set `WHISPER_MODEL=large-v3` if you want maximum accuracy
 and don't mind the wait, or `WHISPER_DEVICE=cuda` to use a GPU (see below).
 
-With VAD filtering (on by default) silence and music are skipped, so a typical
-movie transcribes in a fraction of its runtime on a modern many-core CPU.
+VAD filtering is off by default: it's faster, but on film audio it drops dialogue
+under music and garbles word timestamps. Use the GPU for speed instead.
 
 ## How it works
 
@@ -25,11 +25,14 @@ movie transcribes in a fraction of its runtime on a modern many-core CPU.
    subtitles, embedded subtitle streams (ffprobe), or a previous run already
    handled this exact file (tracked in a small sqlite db, keyed on
    path+size+mtime, so nothing is re-probed on every scan).
-3. **Transcribe** — faster-whisper decodes the media directly (ffmpeg audio
-   extraction as a fallback), auto-detects language unless `LANGUAGE` is set,
-   and streams segments into `Movie Name.en.srt` next to the media file
-   (written atomically via a `.part` rename). Jellyfin picks the sidecar up on
-   its next library scan.
+3. **Transcribe** — ffmpeg decodes the main dialogue track (skipping
+   commentary; center channel only for 5.1/7.1), faster-whisper transcribes it
+   with word timestamps and auto-detects language unless `LANGUAGE` is set, and
+   `app/cues.py` builds cues from the words following subtitle standards
+   (≤ 7 s, ≥ 5/6 s, ≤ 20 cps, 2 × 42 chars, 2-frame gaps). The result is written
+   atomically to `Movie Name.en.srt` via a `.part` rename, and scored by
+   `app/qa.py`. Jellyfin picks the sidecar up on its next library scan. See
+   `docs/ROADMAP.md` for the quality roadmap.
 
 ## Configuration (environment variables)
 
@@ -50,9 +53,16 @@ movie transcribes in a fraction of its runtime on a modern many-core CPU.
 | `BEAM_SIZE` | `5` | Lower (1-2) trades a little accuracy for speed |
 | `LANGUAGE` | *(auto)* | Force a language (`en`) instead of per-file detection |
 | `TASK` | `transcribe` | Or `translate` (any language → English subs) |
-| `VAD_FILTER` | `true` | Skip silence/music — big speedup |
+| `VAD_FILTER` | `false` | Silero VAD pre-filter. Faster, but on film audio it drops quiet/music-backed dialogue and garbles word timestamps (see the comment in `app/config.py`) |
+| `VAD_THRESHOLD` | `0.5` | Silero speech probability threshold |
+| `VAD_MIN_SILENCE_MS` | `500` | Silence that splits speech chunks (faster-whisper's default 2000 glues speech across music) |
+| `VAD_SPEECH_PAD_MS` | `200` | Padding around each speech chunk |
+| `CONDITION_ON_PREVIOUS_TEXT` | `false` | Feed the previous window's text to the next; `true` lets one hallucination repeat |
+| `HALLUCINATION_SILENCE_THRESHOLD` | `2.0` | Skip silences longer than this (s) around suspected hallucinations; 0 disables |
+| `AUDIO_CENTER_CHANNEL` | `true` | Use only the center (dialogue) channel of 5.1/7.1 tracks; falls back to a downmix when it's silent |
 | `SUBTITLE_TAG` | *(empty)* | Extra tag in output name: `<stem><tag>.<lang>.srt` |
 | `OVERWRITE_EXISTING_OUTPUT` | `false` | Don't treat an existing `<stem><tag>.<lang>.srt` as done. Our own output is also an external sub, so pair with `SKIP_IF_EXTERNAL_SUBS=false` to actually regenerate |
+| `REGENERATE_OUTDATED` | `false` | Redo subs this service wrote with an older pipeline version, only if the file is still exactly what we wrote and no other sub sits next to it |
 | `RUN_MODE` | `continuous` | `continuous` (periodic scans) or `manual` (API-only) |
 | `SCAN_INTERVAL_MINUTES` | `60` | Scan cadence in continuous mode |
 | `SCAN_ON_STARTUP` | `true` | Scan immediately when the container starts |

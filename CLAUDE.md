@@ -7,6 +7,9 @@ same NFS export that Jellyfin serves (`10.0.10.20:/mnt/tank/k3s/jellyfin-media`,
 Jellyfin picks up new .srt files on its next library scan. The manifests are in
 `../homelab/apps/whisper-sub-gen/`, not here.
 
+**Subtitle quality work is tracked in `docs/ROADMAP.md`**: phases, decision log, eval results.
+Update it in the same change as the code.
+
 ## Commands
 
 CI (`.github/workflows/build.yaml`) runs a `test` job (ruff check, ruff format --check, unittest on
@@ -14,7 +17,7 @@ Python 3.12) and only builds/pushes the images if it passes. Run the same gates 
 committing:
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v   # stdlib unittest, 44 tests, <1s
+.venv/bin/python -m unittest discover -s tests -v   # stdlib unittest, ~125 tests, <1s
 ruff check . && ruff format --check .               # config in pyproject.toml; CI pins ruff==0.16.1
 ```
 
@@ -41,9 +44,11 @@ docker build --build-arg WITH_CUDA=true -t whisper-sub-gen:cuda .   # adds ~1.5G
 ## Tests and lint
 
 - `tests/` is stdlib `unittest` only (no pytest, no dev requirements). It covers `in_work_window`
-  (incl. across midnight), `Settings` validation, `StateStore` skip/retry on a temp sqlite,
-  `_format_ts`, `check_needs_subtitles` against real temp sidecar files (ffprobe mocked), and
-  `_validate_media_path`. Nothing loads the model, calls ffmpeg or needs a GPU; keep it that way.
+  (incl. across midnight), `Settings` validation, `StateStore` skip/retry/migration/ownership on a
+  temp sqlite, audio track picking, `check_needs_subtitles` against real temp sidecar files
+  (ffprobe mocked), `_validate_media_path`, and the pure pipeline modules (`srt`, `cues`, `qa`,
+  `evaluate`, with property tests over synthetic word streams). Nothing loads the model, calls
+  ffmpeg or needs a GPU; keep it that way.
 - Tests override config by `mock.patch.object(settings, "<field>", value)` on the singleton, since
   `settings` is built once at import. `tests/test_api.py` sets `settings.state_dir` to a temp dir
   *before* importing `app.api`, because that import constructs the `Worker` (see gotchas).
@@ -62,8 +67,17 @@ app/main.py         FastAPI app; lifespan binds gauges, starts the worker, then 
 app/config.py       pydantic-settings Settings (every field = env var, case-insensitive) + in_work_window()
 app/worker.py       Worker singleton: in-memory job queue, 1 "worker" thread, 1 "scanner" thread (continuous mode)
 app/scanner.py      find_videos (oldest first, ignore globs, min-age), sidecar/ffprobe skip checks, output_path
-app/transcriber.py  lazy WhisperModel load, segment loop -> .srt.part -> atomic rename, live Progress, cancel flag
-app/state.py        sqlite at $STATE_DIR/whisper-sub-gen.db, keyed on path; skip if same size+mtime and done/skipped
+app/transcriber.py  pipeline driver: audio -> faster-whisper words -> cues -> qa -> .srt.part -> rename;
+                    lazy model load, live Progress, cancel flag, PIPELINE_VERSION
+app/audio.py        pick the dialogue track (skip commentary), ffmpeg -> 16 kHz mono float32 in memory,
+                    center channel only for 5.1/7.1 (downmix fallback when FC is silent)
+app/cues.py         PURE words -> cues composer (segmentation, line breaks, cps, gaps) per CueRules
+app/standards.py    CueRules: the subtitle timing/readability limits (subtitling.net / Netflix)
+app/srt.py          PURE Cue model, format_ts, render_srt, lenient parse_srt (human subs too)
+app/qa.py           PURE standards score of any cue list; CLI `python -m app.qa FILE.srt`
+app/evaluate.py     PURE hyp-vs-human-sub timing/WER metrics; CLI `python -m app.evaluate HYP REF`
+app/state.py        sqlite at $STATE_DIR/whisper-sub-gen.db, keyed on path; skip if same size+mtime and
+                    done/skipped; pipeline version + fingerprint of the sub we wrote + qa score
 app/api.py          /healthz /metrics (no auth); /status /history /scan /process DELETE /history (API_KEY if set)
 app/metrics.py      subgen_* Prometheus metrics
 ```
@@ -74,7 +88,7 @@ The full env var table is in `README.md`. It is sourced from `Settings` in `app/
 both in sync when adding a field (the table currently lists every field).
 `OVERWRITE_EXISTING_OUTPUT=true` only helps together with `SKIP_IF_EXTERNAL_SUBS=false`, because
 our own .srt also counts as an external sub. Prod values live in `../homelab/apps/whisper-sub-gen/configmap.yaml`:
-`large-v3-turbo`, `WHISPER_DEVICE=cpu`, `CPU_THREADS=12` (capped so Jellyfin transcodes aren't
+`large-v3-turbo`, `WHISPER_DEVICE=cpu` (moving to the CUDA image, see ROADMAP Phase 2), `CPU_THREADS=12` (capped so Jellyfin transcodes aren't
 starved), `SCAN_INTERVAL_MINUTES=360`, `SHUTDOWN_MODE=abort`, and no `WORK_WINDOW`. There is no
 `API_KEY` yet (the secretRef is commented out, waiting on a SealedSecret). `ingressroute.yaml` exists
 but is not enabled in kustomization. In-cluster callers use
@@ -108,8 +122,8 @@ load.
   `STATE_DIR`. `app.config`, `app.scanner` and `app.state` are safe to import for unit tests.
 - The container runs as uid 1000 (the pod `securityContext` matches). The NFS media share and the
   state volume must be writable by uid 1000. `StateStore` raises a hint about exactly this.
-- **Output is atomic.** Segments stream into `<target>.srt.part`, which is renamed on success and
-  unlinked on any `BaseException`. A `.part` older than 1h that a hard kill left behind is deleted
+- **Output is atomic.** The composed cues are written to `<target>.srt.part` once the ASR finishes,
+  which is renamed on success and unlinked on any `BaseException`. A `.part` older than 1h that a hard kill left behind is deleted
   by the next scan. Don't write the final .srt directly.
 - **Shutdown semantics (`SHUTDOWN_MODE`).** `abort` sets `transcriber.cancel`. The segment loop
   raises `TranscriptionCancelled`, and no state row is written, so the file is retried after the
@@ -123,8 +137,14 @@ load.
 - The skip logic runs twice, at scan time and again right before processing (subs may have
   appeared meanwhile), unless `force`. `/process` with `force: true` calls `store.forget()` and
   bypasses the work window.
-- Decoding tries PyAV directly first and falls back to ffmpeg extracting 16kHz mono wav into
-  `$STATE_DIR/tmp`, which is always cleaned up in `finally`.
+- Audio is always decoded by ffmpeg (`app/audio.py`) into memory (~0.7 GB float32 for 3 h), bounded
+  by `EXTRACT_TIMEOUT_S`. No temp files. The same array feeds every stage.
+- **VAD is off by default on purpose** (see the comment in `config.py`): on film audio Silero drops
+  music-backed dialogue and garbles word timestamps. Don't turn it back on for speed; use the GPU.
+- **Never touch a sub we didn't write.** Regeneration (`REGENERATE_OUTDATED`) goes through
+  `StateStore.outdated_output`, which only returns our own output while it's byte-for-byte what we
+  wrote (size+mtime fingerprint; ctime for pre-v1 rows) and no other sub sits next to the video.
+  Bump `transcriber.PIPELINE_VERSION` when output quality changes materially.
 - The model loads lazily on the first job, not at startup, so the first job is slow and
   `/healthz` stays green while the model downloads.
 - `/process` and `/scan` paths must resolve inside `MEDIA_DIRS` (`_validate_media_path`). Keep that
