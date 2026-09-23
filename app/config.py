@@ -7,7 +7,7 @@ fully configurable from a k8s Deployment or a plain `docker run`.
 from __future__ import annotations
 
 import re
-from datetime import time
+from datetime import datetime, time
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -146,8 +146,6 @@ def in_work_window(now_time: time | None = None) -> bool:
     win = settings.window
     if win is None:
         return True
-    from datetime import datetime
-
     now = now_time or datetime.now().time()
     start, end = win
     if start <= end:

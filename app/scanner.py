@@ -86,15 +86,13 @@ def external_subtitles(video: Path) -> list[Path]:
 
 
 def ffprobe(video: Path) -> dict:
-    out = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-show_format", str(video),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    # fmt: off
+    cmd = [
+        "ffprobe", "-v", "error", "-print_format", "json",
+        "-show_streams", "-show_format", str(video),
+    ]
+    # fmt: on
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     if out.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {out.stderr.strip()[:400]}")
     return json.loads(out.stdout)
@@ -143,5 +141,6 @@ def media_duration(video: Path) -> float:
     try:
         probe = ffprobe(video)
         return float(probe.get("format", {}).get("duration", 0.0))
-    except Exception:
+    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, TypeError):
+        # ffprobe missing/failed/timed out, bad JSON, or a non-numeric duration.
         return 0.0

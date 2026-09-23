@@ -55,7 +55,7 @@ class Progress:
 
 
 def _format_ts(seconds: float) -> str:
-    ms = max(0, int(round(seconds * 1000)))
+    ms = max(0, round(seconds * 1000))
     h, rem = divmod(ms, 3_600_000)
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
@@ -68,6 +68,7 @@ def _extract_audio(video: Path, dest_dir: Path) -> Path:
     fd, name = tempfile.mkstemp(suffix=".wav", dir=dest_dir)
     os.close(fd)
     wav = Path(name)
+    # fmt: off
     cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-i", str(video),
@@ -76,7 +77,8 @@ def _extract_audio(video: Path, dest_dir: Path) -> Path:
         "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
         str(wav),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # fmt: on
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         wav.unlink(missing_ok=True)
         raise RuntimeError(f"ffmpeg audio extraction failed: {result.stderr[:400]}")
@@ -135,12 +137,12 @@ class Transcriber:
             self.progress.started_at = started
             self.progress.language = ""
 
-        kwargs = dict(
-            task=settings.task,
-            language=settings.language or None,
-            beam_size=settings.beam_size,
-            vad_filter=settings.vad_filter,
-        )
+        kwargs = {
+            "task": settings.task,
+            "language": settings.language or None,
+            "beam_size": settings.beam_size,
+            "vad_filter": settings.vad_filter,
+        }
 
         extracted: Path | None = None
         try:
