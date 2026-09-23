@@ -52,12 +52,14 @@ movie transcribes in a fraction of its runtime on a modern many-core CPU.
 | `TASK` | `transcribe` | Or `translate` (any language → English subs) |
 | `VAD_FILTER` | `true` | Skip silence/music — big speedup |
 | `SUBTITLE_TAG` | *(empty)* | Extra tag in output name: `<stem><tag>.<lang>.srt` |
+| `OVERWRITE_EXISTING_OUTPUT` | `false` | Don't treat an existing `<stem><tag>.<lang>.srt` as done. Our own output is also an external sub, so pair with `SKIP_IF_EXTERNAL_SUBS=false` to actually regenerate |
 | `RUN_MODE` | `continuous` | `continuous` (periodic scans) or `manual` (API-only) |
 | `SCAN_INTERVAL_MINUTES` | `60` | Scan cadence in continuous mode |
 | `SCAN_ON_STARTUP` | `true` | Scan immediately when the container starts |
 | `WORK_WINDOW` | *(empty)* | e.g. `23:00-07:00` — only transcribe inside this window (may cross midnight); the queue pauses outside it |
 | `MANUAL_BYPASS_WINDOW` | `true` | API-triggered jobs run immediately regardless of window |
 | `API_KEY` | *(empty)* | If set, required as `X-Api-Key` or `Bearer` on all endpoints except `/healthz` and `/metrics` |
+| `HOST` | `0.0.0.0` | API bind address |
 | `PORT` | `8000` | API port |
 | `STATE_DIR` | `/data` | sqlite db + temp audio |
 | `MODEL_DIR` | `/models` | Model download cache (mount a volume!) |
@@ -112,6 +114,16 @@ and a `job N done ... M files left in queue` line on completion. Probe spam
 (`/healthz`, `/metrics`) is filtered out of the access log. `GET /status`
 shows the current file with live percent at any time.
 
+## Development
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt ruff
+.venv/bin/python -m unittest discover -s tests -v   # no model download, no GPU
+ruff check . && ruff format --check .
+```
+
+CI runs the same three checks before building the images.
+
 ## Running standalone
 
 ```bash
@@ -123,7 +135,10 @@ docker compose up -d          # edit docker-compose.yml volumes first
 CPU is the default and deliberately capped (`CPU_THREADS=12`) so transcodes
 aren't starved. If throughput on a big backlog matters, GPU is ~10x faster:
 
-1. Build with `--build-arg WITH_CUDA=true`.
+1. Use the CUDA image CI publishes alongside the CPU one:
+   `ghcr.io/mikegio27/whisper-sub-gen:sha-<short>-cuda` (or `:cuda` for the
+   latest `main` build). To build it yourself, pass
+   `--build-arg WITH_CUDA=true`.
 2. In the deployment: set `WHISPER_DEVICE=cuda`, add
    `runtimeClassName: nvidia`, `nodeSelector: {gpu: "true"}` and
    `resources.limits."nvidia.com/gpu": 1` (one of the four time-slices).
