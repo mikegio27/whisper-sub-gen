@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)",
+      "Bash(.venv/bin/python -m unittest:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run watch:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(kubectl -n whisper-sub-gen get:*)",
+      "Bash(kubectl -n whisper-sub-gen describe:*)",
+      "Bash(kubectl -n whisper-sub-gen logs:*)",
+      "Bash(kubectl -n whisper-sub-gen top:*)",
+      "Bash(kubectl -n whisper-sub-gen rollout status:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ruff.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check.sh",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
