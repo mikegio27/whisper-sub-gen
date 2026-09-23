@@ -27,6 +27,7 @@ difflib, and the metrics come from that alignment:
 from __future__ import annotations
 
 import argparse
+import bisect
 import difflib
 import json
 import re
@@ -133,6 +134,46 @@ def tokenize(cues: list[Cue]) -> list[Token]:
     return tokens
 
 
+# Neighbouring anchors on each side used for the local offset. ~25 onsets span
+# a couple of minutes of dialogue: long enough to be robust to our own errors,
+# short enough to follow a re-cut or a 25-vs-23.976 fps drift.
+LOCAL_K = 25
+
+
+def _local_residuals(
+    points: list[tuple[float, float]], anchors: list[tuple[float, float]]
+) -> list[float]:
+    """For each (ref time, diff) point, diff minus the median diff of the LOCAL_K
+    onset anchors on either side of it in time (excluding an identical anchor)."""
+    if len(anchors) < 3:
+        return []
+    anchors = sorted(anchors)
+    times = [t for t, _ in anchors]
+    out = []
+    for t, d in points:
+        i = bisect.bisect_left(times, t)
+        lo, hi = max(0, i - LOCAL_K), min(len(anchors), i + LOCAL_K + 1)
+        near = [ad for k, (at, ad) in enumerate(anchors[lo:hi], lo) if not (at == t and ad == d)]
+        if near:
+            out.append(d - statistics.median(near))
+    return out
+
+
+def _block(xs: list[float]) -> dict:
+    """Signed errors (s) -> n, median signed, abs-error stats and within-X%."""
+    ab = [abs(x) for x in xs]
+    d = {
+        "n": len(xs),
+        "median_signed": statistics.median(xs) if xs else None,
+        "median_abs": statistics.median(ab) if ab else None,
+        "p90_abs": qa.percentile(ab, 90) if ab else None,
+    }
+    for ms in WITHIN_MS:
+        # Whole-ms compare: SRT times are ms-quantised, float noise shouldn't flip a bucket.
+        d[f"within_{ms}"] = 100 * sum(round(a * 1000) <= ms for a in ab) / len(ab) if ab else None
+    return d
+
+
 def _err_stats(diffs: list[float], offset: float | None) -> dict:
     """Signed diffs (s) -> median signed plus abs-error stats, raw and with `offset` removed."""
 
@@ -167,7 +208,7 @@ def compare(hyp: list[Cue], ref: list[Cue]) -> dict:
     sm = difflib.SequenceMatcher(None, [t.word for t in rt], [t.word for t in ht], autojunk=False)
     subs = dels = ins = matched = 0
     onsets: list[tuple[float, float]] = []  # (ref cue start, hyp start - ref start)
-    ends: list[float] = []
+    ends: list[tuple[float, float]] = []  # (ref cue start, hyp end - ref end)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             matched += i2 - i1
@@ -178,7 +219,7 @@ def compare(hyp: list[Cue], ref: list[Cue]) -> dict:
                 if r.first and h.first:
                     onsets.append((rc.start, hc.start - rc.start))
                 if r.last and h.last:
-                    ends.append(hc.end - rc.end)
+                    ends.append((rc.start, hc.end - rc.end))
         elif tag == "replace":
             n_ref, n_hyp = i2 - i1, j2 - j1
             subs += min(n_ref, n_hyp)
@@ -190,13 +231,14 @@ def compare(hyp: list[Cue], ref: list[Cue]) -> dict:
             ins += j2 - j1
 
     onset_diffs = [d for _, d in onsets]
+    end_diffs = [d for _, d in ends]
     # One global offset for both onset and end errors: it is a property of the two releases,
     # so a systematic "our cues linger too long" bias stays visible in the end errors instead
     # of being subtracted away by their own median.
     if onset_diffs:
         offset = statistics.median(onset_diffs)
-    elif ends:
-        offset = statistics.median(ends)
+    elif end_diffs:
+        offset = statistics.median(end_diffs)
     else:
         offset = None
 
@@ -208,12 +250,22 @@ def compare(hyp: list[Cue], ref: list[Cue]) -> dict:
         "hyp_words": len(ht),
         "matched_ratio": matched / n_ref if n_ref else 0.0,
         "wer_approx": (subs + dels + ins) / n_ref if n_ref else 0.0,
+        # Ignores insertions: robust to an incomplete reference (e.g. a human
+        # sub that skips half the dialogue, which makes every extra hyp word an
+        # "insertion" and pushes wer_approx past 100%).
+        "sub_del_rate": (subs + dels) / n_ref if n_ref else 0.0,
         "substitutions": subs,
         "deletions": dels,
         "insertions": ins,
         "global_offset": offset,
         "onset": _err_stats(onset_diffs, offset),
-        "offset": _err_stats(ends, offset),
+        "offset": _err_stats(end_diffs, offset),
+        # Errors against the *local* offset (rolling median of neighbouring
+        # anchors): robust to a reference made for a different cut or frame
+        # rate, where one global offset can be minutes off mid-film. This is
+        # the headline timing number; the global one is kept for context.
+        "onset_local": _block(_local_residuals(onsets, onsets)),
+        "offset_local": _block(_local_residuals(ends, onsets)),
         "drift": _drift(onsets, ref),
     }
 
@@ -256,6 +308,8 @@ def format_comparison(r: dict) -> str:
         f"matched      {100 * r['matched_ratio']:.1f}% of ref words",
         f"wer_approx   {100 * r['wer_approx']:.1f}%  (S {r['substitutions']}  "
         f"D {r['deletions']}  I {r['insertions']})",
+        f"sub+del      {100 * r['sub_del_rate']:.1f}%  (ignores insertions; use when the ref "
+        "is incomplete)",
         f"global off.  {_fmt_s(r['global_offset'])}  (median onset diff, hyp - ref)",
     ]
     d = r["drift"]
@@ -273,6 +327,13 @@ def format_comparison(r: dict) -> str:
                 f"  {label:<21} median {_fmt_s(b['median_signed'])}  "
                 f"|median| {_fmt_abs(b['median_abs'])}  p90 {_fmt_abs(b['p90_abs'])}  {within}"
             )
+    for name in ("onset_local", "offset_local"):
+        b = r[name]
+        within = "  ".join(f"<={ms}ms {_fmt_pct(b[f'within_{ms}'])}" for ms in WITHIN_MS)
+        lines.append(
+            f"{name:<13}(n {b['n']}) median {_fmt_s(b['median_signed'])}  "
+            f"|median| {_fmt_abs(b['median_abs'])}  p90 {_fmt_abs(b['p90_abs'])}  {within}"
+        )
     return "\n".join(lines)
 
 

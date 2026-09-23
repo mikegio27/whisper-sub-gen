@@ -251,9 +251,30 @@ class TargetedTest(CueInvariants, unittest.TestCase):
         self.assertGreater(c.end, spoken_end)
         self.assertAlmostEqual(c.end, spoken_end + R.max_linger, places=3)  # linger cap
         slow = compose(words_from("Yes.", per_word=0.3))[0]
-        self.assertAlmostEqual(slow.duration, R.min_duration, places=3)
-        mid = compose(words_from("It's in the cupboard under the stairs.", per_word=0.25))[0]
-        self.assertAlmostEqual(mid.duration, len(mid.text) / R.target_cps, delta=0.002)
+        self.assertAlmostEqual(slow.duration, max(R.min_duration, 0.3 + R.min_linger), places=3)
+        mws = words_from("It's in the cupboard under the stairs.", per_word=0.25)
+        mid = compose(mws)[0]
+        # Whichever is later: reading time at target_cps, or speech end + min_linger.
+        want = max(len(mid.text) / R.target_cps, mws[-1].end + R.min_linger - mid.start)
+        self.assertAlmostEqual(mid.duration, want, delta=0.002)
+
+    def test_min_linger_holds_a_cue_after_speech(self):
+        ws = words_from("Go now.", per_word=0.5)
+        c = compose(ws)[0]
+        self.assertAlmostEqual(c.end, ws[-1].end + R.min_linger, places=3)
+        # ...unless the next cue needs the room: then min_gap wins.
+        a = words_from("Go now.", per_word=0.5)
+        b = words_from(
+            "Come back tomorrow and bring the whole family along.",
+            start=a[-1].end + R.min_linger + 0.3,
+        )
+        first, second = compose(a + b)[:2]
+        self.assertAlmostEqual(first.end, a[-1].end + R.min_linger, places=3)
+        c = words_from("Come back tomorrow.", start=a[-1].end + 0.3, per_word=0.3)
+        cues = compose(a + c)
+        if len(cues) == 2:
+            self.assertGreaterEqual(round(cues[1].start - cues[0].end, 3), R.min_gap)
+            self.assertLess(cues[0].end, a[-1].end + R.min_linger)
 
     def test_min_duration_beats_linger(self):
         rules = CueRules(max_linger=0.1)

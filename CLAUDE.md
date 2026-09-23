@@ -76,6 +76,12 @@ app/standards.py    CueRules: the subtitle timing/readability limits (subtitling
 app/srt.py          PURE Cue model, format_ts, render_srt, lenient parse_srt (human subs too)
 app/qa.py           PURE standards score of any cue list; CLI `python -m app.qa FILE.srt`
 app/evaluate.py     PURE hyp-vs-human-sub timing/WER metrics; CLI `python -m app.evaluate HYP REF`
+app/align.py        CTC forced alignment (MMS-300m via transformers + our numpy Viterbi) per whisper
+                    segment window; falls back to whisper word times per segment (score < -5.0)
+app/hallucination.py PURE drop of non-speech fakes (isolated "Thank you.", SDH caps, music marks)
+app/correct.py      local-LLM (Ollama) proofreading of flagged words; code-side acceptance test; off by default
+app/context.py      title/year/cast from the path (+ Jellyfin API when JELLYFIN_URL/API_KEY set)
+scripts/run_eval.py eval-set runner (eval/set.tsv, human refs on the Jellyfin share); not in the image
 app/state.py        sqlite at $STATE_DIR/whisper-sub-gen.db, keyed on path; skip if same size+mtime and
                     done/skipped; pipeline version + fingerprint of the sub we wrote + qa score
 app/api.py          /healthz /metrics (no auth); /status /history /scan /process DELETE /history (API_KEY if set)
@@ -139,6 +145,13 @@ load.
   bypasses the work window.
 - Audio is always decoded by ffmpeg (`app/audio.py`) into memory (~0.7 GB float32 for 3 h), bounded
   by `EXTRACT_TIMEOUT_S`. No temp files. The same array feeds every stage.
+- The image installs **torch from the PyTorch index before requirements.txt** (cu129 for the CUDA
+  image, cpu otherwise). Installing it after would let transformers drag PyPI's CUDA torch into
+  the CPU image. Tests never import torch. Locally, CUDA runs need the venv's `nvidia/*/lib` dirs
+  on `LD_LIBRARY_PATH` (`scripts/run_eval.py` sets that itself).
+- Stage order in `transcribe()`: decode → whisper → hallucination filter → align → (LLM) → compose.
+  Alignment and the LLM **fail open** (they keep the previous words and log); only decode/ASR errors
+  fail a job.
 - **VAD is off by default on purpose** (see the comment in `config.py`): on film audio Silero drops
   music-backed dialogue and garbles word timestamps. Don't turn it back on for speed; use the GPU.
 - **Never touch a sub we didn't write.** Regeneration (`REGENERATE_OUTDATED`) goes through

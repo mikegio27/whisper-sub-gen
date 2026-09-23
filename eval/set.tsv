@@ -1,0 +1,7 @@
+# Eval set: video<TAB>human reference sub, relative to --media-root (the Jellyfin share).
+# Why each: talky / accents+5.1 / fast speech+slang / action+SDH / score-heavy+SDH.
+movies/The Big Lebowski (1998)/The Big Lebowski (1998) [1080p].mp4	movies/The Big Lebowski (1998)/The Big Lebowski (1998) [1080p].en.srt
+movies/Fargo (1996)/Fargo (1996) [REMASTERED] [1080p] [BluRay] [5.1] [YTS.MX].mp4	movies/Fargo (1996)/Fargo (1996) [REMASTERED] [1080p] [BluRay] [5.1] [YTS.MX].en.srt
+movies/Snatch (2000)/Snatch (2000) [BluRay] [1080p] [YTS.AM].mp4	movies/Snatch (2000)/Snatch (2000) [BluRay] [1080p] [YTS.AM].en.hi.srt
+movies/The Rock (1996)/The Rock (1996) [1080p].mp4	movies/The Rock (1996)/The Rock (1996) [1080p].en.hi.srt
+movies/Interstellar (2014)/Interstellar (2014) (2014) [1080p].mp4	movies/Interstellar (2014)/Interstellar (2014) (2014) [1080p].en.hi.srt

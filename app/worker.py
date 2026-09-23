@@ -354,6 +354,13 @@ class Worker:
         )
         metrics.PROCESSED.inc()
         metrics.QA_VIOLATIONS.observe(result["qa"]["violations_per_100"])
+        aligned = result.get("aligned") or {}
+        if aligned.get("error"):
+            metrics.ALIGN_ERRORS.inc()
+        elif aligned.get("enabled"):
+            metrics.ALIGN_SEGMENTS.labels("aligned").inc(aligned.get("aligned", 0))
+            metrics.ALIGN_SEGMENTS.labels("fallback").inc(aligned.get("fallback", 0))
+        metrics.HALLUCINATIONS.inc(result.get("hallucinations_dropped", 0))
         metrics.MEDIA_SECONDS.inc(result["duration_s"])
         log.info(
             "job %d done: %s [%s] — %d files left in queue",

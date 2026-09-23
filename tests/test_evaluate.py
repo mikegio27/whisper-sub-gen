@@ -208,5 +208,34 @@ class CliTest(unittest.TestCase):
             self.assertIn("violations_per_100", out.getvalue())
 
 
+class LocalOffsetTest(unittest.TestCase):
+    """A reference from a different cut: the offset jumps mid-film."""
+
+    def test_local_residuals_follow_a_recut(self):
+        from app.srt import Cue
+
+        ref, hyp = [], []
+        for i in range(200):
+            t = 10.0 + i * 5
+            shift = 1.0 if i < 100 else 61.0  # 60 s scene removed from the ref's cut
+            words = f"line number {i} says something different"
+            ref.append(Cue(t, t + 2, words))
+            hyp.append(Cue(t + shift + (0.05 if i % 2 else -0.05), t + shift + 2, words))
+        r = compare(hyp, ref)
+        self.assertGreater(r["onset"]["corrected"]["median_abs"], 5)  # global offset fails
+        local = r["onset_local"]
+        self.assertLess(local["median_abs"], 0.2)
+        self.assertGreater(local["within_100"], 90)
+
+    def test_sub_del_rate_ignores_insertions(self):
+        from app.srt import Cue
+
+        ref = [Cue(1, 2, "hello there friend")]
+        hyp = [Cue(1, 2, "hello there friend"), Cue(5, 6, "extra words nobody subtitled")]
+        r = compare(hyp, ref)
+        self.assertGreater(r["wer_approx"], 1.0)
+        self.assertEqual(r["sub_del_rate"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

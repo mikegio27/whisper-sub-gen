@@ -363,7 +363,11 @@ def _timed(ws: list[Word], groups: list[tuple[int, int]], rules: CueRules) -> li
             s = prev_end + gap  # only with degenerate input (onsets closer than min_gap)
         e_spoken = max(spoken[k], s)
         chars = len(text.replace("\n", ""))
-        want = max(e_spoken, s + min_d, s + math.ceil(chars / rules.target_cps * 1000))
+        want = max(
+            e_spoken + round(rules.min_linger * 1000),
+            s + min_d,
+            s + math.ceil(chars / rules.target_cps * 1000),
+        )
         # Linger is capped, but min_duration beats the cap.
         want = min(want, max(e_spoken + linger, s + min_d))
         if k + 1 < len(groups):

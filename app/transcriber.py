@@ -1,7 +1,7 @@
 """Pipeline driver: media in, sidecar .srt out.
 
-audio.load_audio -> faster-whisper (word timestamps) -> cues.compose -> srt.
-See docs/ROADMAP.md for the stages still to come (alignment, LLM correction).
+audio.load_audio -> faster-whisper (word timestamps) -> align (CTC forced alignment)
+-> cues.compose -> srt. See docs/ROADMAP.md for the stages still to come (LLM correction).
 """
 
 from __future__ import annotations
@@ -16,9 +16,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .align import Aligner, AlignSegment
 from .audio import SAMPLE_RATE, load_audio
 from .config import settings
+from .correct import correct_video
 from .cues import Word, compose
+from .hallucination import filter_segments
 from .qa import score as qa_score
 from .scanner import ffprobe, output_path
 from .srt import render_srt
@@ -27,7 +30,8 @@ from .srt import render_srt
 # REGENERATE_OUTDATED can redo subs made by an older pipeline.
 #   0: raw whisper segments (<= sha-2fae320)
 #   1: center-channel audio, word timestamps, composed cues (docs/ROADMAP.md P1)
-PIPELINE_VERSION = 1
+#   2: word times from CTC forced alignment (MMS aligner, app/align.py, ROADMAP P2)
+PIPELINE_VERSION = 2
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +108,7 @@ class Transcriber:
         self.cancel = threading.Event()
         # Last model load/smoke-test failure; /healthz reports unhealthy while set.
         self.load_error: str | None = None
+        self._aligner: Aligner | None = None
 
     @property
     def model_name(self) -> str:
@@ -215,8 +220,32 @@ class Transcriber:
             with self.progress._lock:
                 self.progress.language = lang
 
-            words = self._collect_words(video, segments, duration, started)
-            del audio  # ~0.7 GB for a long film; not needed past the ASR
+            asr_segments = self._collect_words(video, segments, duration, started)
+            # Before alignment: no point aligning a fake line over the score.
+            asr_segments, hallucinated = filter_segments(asr_segments)
+            if hallucinated:
+                log.info(
+                    "dropped %d non-speech hallucinations in %s: %s",
+                    len(hallucinated),
+                    video.name,
+                    "; ".join(hallucinated[:8]),
+                )
+            words = [w for seg in asr_segments for w in seg.words]
+            aligned: dict = {"enabled": False}
+            if settings.align_words:
+                words, aligned = self._align(video, audio, asr_segments, words, lang)
+            del audio  # ~0.7 GB for a long film; not needed past alignment
+            corrected: dict = {"enabled": False}
+            if settings.llm_correct and settings.ollama_url:
+                # Fails open (keeps the ASR text); stops early on cancel/budget.
+                try:
+                    words, corrected = correct_video(words, video, cancel=self.cancel)
+                except Exception as exc:  # fail open: keep the ASR words
+                    log.exception("LLM correction failed for %s; keeping ASR text", video.name)
+                    corrected = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+                corrected["enabled"] = True
+                if self.cancel.is_set():
+                    raise TranscriptionCancelled(str(video))
             cues = compose(words)
             if not cues:
                 raise RuntimeError("no speech detected — nothing to write")
@@ -254,8 +283,11 @@ class Transcriber:
                 "words": len(words),
                 "duration_s": duration,
                 "elapsed_s": elapsed,
-                "pipeline": PIPELINE_VERSION,
+                "pipeline": _effective_pipeline(aligned),
                 "qa": quality,
+                "hallucinations_dropped": len(hallucinated),
+                "aligned": aligned,
+                "corrected": corrected,
             }
         finally:
             with self.progress._lock:
@@ -266,18 +298,64 @@ class Transcriber:
                 self.progress.segments = 0
                 self.progress.language = ""
 
-    def _collect_words(self, video: Path, segments, duration: float, started: float) -> list[Word]:
+    def _align(
+        self, video: Path, audio, asr_segments: list[AlignSegment], words: list[Word], lang: str
+    ) -> tuple[list[Word], dict]:
+        """Forced-align the words. Never fails the job: on any aligner error the
+        whisper word times are kept, and the stats say so."""
+        if self._aligner is None:
+            self._aligner = Aligner(
+                settings.align_model,
+                device=settings.whisper_device,
+                model_dir=settings.model_dir,
+                batch_seconds=settings.align_batch_seconds,
+                min_score=settings.align_min_score,
+                cpu_threads=settings.cpu_threads,
+            )
+
+        def check_cancel() -> None:
+            if self.cancel.is_set():
+                raise TranscriptionCancelled(str(video))
+
+        try:
+            res = self._aligner.align(audio, asr_segments, lang, check_cancel=check_cancel)
+        except TranscriptionCancelled:
+            raise
+        except Exception as exc:
+            log.exception("alignment failed for %s; keeping whisper word times", video.name)
+            return words, {"enabled": True, "error": f"{type(exc).__name__}: {exc}"[:300]}
+        finally:
+            if settings.align_free_after_job:
+                self._aligner.free()
+        stats = res.stats.as_dict()
+        log.info(
+            "aligned %s: %d/%d segments (%d fell back: %s) in %.1fs, mean score %s",
+            video.name,
+            stats["aligned"],
+            stats["segments"],
+            stats["fallback"],
+            stats["reasons"] or "-",
+            stats["elapsed_s"],
+            stats["mean_score"],
+        )
+        return res.words, {"enabled": True, **stats}
+
+    def _collect_words(
+        self, video: Path, segments, duration: float, started: float
+    ) -> list[AlignSegment]:
         """Drain the segment generator (this is where the ASR actually runs),
-        keeping live progress and honouring the cancel flag."""
-        words: list[Word] = []
+        keeping live progress and honouring the cancel flag. Words stay grouped
+        by segment, which is the unit the aligner works in."""
+        out: list[AlignSegment] = []
         count = 0
         heartbeat = settings.progress_log_seconds
         next_heartbeat = time.time() + heartbeat if heartbeat else math.inf
         for seg in segments:
             if self.cancel.is_set():
                 raise TranscriptionCancelled(str(video))
-            for w in seg.words or ():
-                words.append(Word(w.start, w.end, w.word, w.probability))
+            seg_words = [Word(w.start, w.end, w.word, w.probability) for w in seg.words or ()]
+            if seg_words:
+                out.append(AlignSegment(seg.start, seg.end, seg_words))
             count += 1
             with self.progress._lock:
                 self.progress.transcribed_s = seg.end
@@ -306,7 +384,19 @@ class Transcriber:
                         seg.end,
                         speed,
                     )
-        return words
+        return out
+
+
+def _effective_pipeline(aligned: dict) -> int:
+    """The version this output really is. When alignment was off, errored, or
+    mostly fell back, the timings are v1's, so record 1: REGENERATE_OUTDATED
+    then redoes the file once the aligner works, instead of trusting it."""
+    if not aligned.get("enabled") or aligned.get("error"):
+        return 1
+    segments = aligned.get("segments") or 0
+    if segments and aligned.get("aligned", 0) < 0.5 * segments:
+        return 1
+    return PIPELINE_VERSION
 
 
 def _probe_duration(probe: dict) -> float:

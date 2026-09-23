@@ -13,6 +13,17 @@ CURRENT_PROGRESS = Gauge(
     "subgen_current_file_progress_percent",
     "Progress through the file currently being transcribed",
 )
+ALIGN_SEGMENTS = Counter(
+    "subgen_align_segments_total",
+    "Whisper segments by forced-alignment outcome",
+    ["result"],  # aligned | fallback
+)
+ALIGN_ERRORS = Counter(
+    "subgen_align_errors_total", "Files where forced alignment failed entirely (whisper times kept)"
+)
+HALLUCINATIONS = Counter(
+    "subgen_hallucinations_dropped_total", "Non-speech hallucinated segments dropped"
+)
 QA_VIOLATIONS = Histogram(
     "subgen_qa_violations_per_100_cues",
     "Subtitle-standard violations per 100 cues in each written file (qa.score)",

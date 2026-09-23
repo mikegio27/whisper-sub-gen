@@ -66,6 +66,20 @@ class Settings(BaseSettings):
     audio_center_channel: bool = True
     model_dir: str = "/models"  # HuggingFace download cache (mount a volume)
 
+    # --- Forced alignment (app/align.py, ROADMAP P2) ---
+    # Re-time whisper's words with a CTC aligner. A segment that can't be
+    # aligned, or an aligner failure, keeps whisper's word times.
+    align_words: bool = True
+    align_model: str = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+    # Mean per-token log-prob below which a segment keeps whisper's timings.
+    # -5 drops ~0.5% of segments on The Big Lebowski (2026-09-22), incl. the
+    # "Transcription by CastingWords" credits hallucination; see align.py.
+    align_min_score: float = -5.0
+    # Padded audio per forward pass (s). Bounds the aligner's VRAM.
+    align_batch_seconds: float = 120.0
+    # Unload the aligner after each job: the stages share a 12 GB card.
+    align_free_after_job: bool = True
+
     # --- Output ---
     # Filename becomes "<video stem><subtitle_tag>.<lang>.srt"
     subtitle_tag: str = ""
@@ -74,6 +88,25 @@ class Settings(BaseSettings):
     # only while the file on disk is still exactly what we wrote (size+mtime),
     # so a sub the owner replaced or edited is never touched.
     regenerate_outdated: bool = False
+
+    # --- LLM word correction (app/correct.py, app/context.py, ROADMAP P3) ---
+    # A local LLM (Ollama) proposes replacements for low-confidence words;
+    # code accepts only sound-alike edits or exact cast/character names. Fails
+    # open: Ollama down, slow or talking nonsense = the ASR text is kept.
+    # Off until the eval shows it helps.
+    llm_correct: bool = False
+    ollama_url: str = ""  # e.g. http://ollama.ollama.svc.cluster.local:11434
+    ollama_model: str = "qwen3.5:4b"
+    # Words whisper is less sure of than this get a second look. 0.6 flagged
+    # ~9-12% of words on the OotP clip (2026-09-22), incl. "Austin?" 0.22
+    # (asked you), "Fig?" 0.47; capitalised names are flagged separately.
+    llm_flag_prob: float = 0.6
+    llm_timeout_s: float = 120.0  # per request (the first one loads the model)
+    llm_budget_s: float = 900.0  # per film; stop sending windows past this
+    # Character names come from Jellyfin's People for the item. The API key is
+    # a secret: set it from a SealedSecret (secretRef), never the ConfigMap.
+    jellyfin_url: str = ""  # http://jellyfin.jellyfin.svc.cluster.local:8096
+    jellyfin_api_key: str = ""
 
     # --- Run mode & scheduling ---
     # continuous: scan every scan_interval_minutes and process

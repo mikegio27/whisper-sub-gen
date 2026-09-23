@@ -40,8 +40,12 @@ Root causes, all in the old `transcriber.py`:
 | 2026-09-22 | Our own cue composer (`app/cues.py`) applies the standards to word timings | Pure and unit-testable. Doesn't depend on the ASR/aligner |
 | 2026-09-22 | Evaluate against human subs already in the library | Owner has many. Timing and WER are measured, not eyeballed |
 | 2026-09-22 | **VAD off by default** | On a 4 min OotP clip Silero cut 2:45 of 4:03 as non-speech, lost whole lines ("Come on, Dudley, let's go. What's going on?") and smeared word times across chunk boundaries ("What are you doing?" spread over 9 s). With VAD off, the text was right ("Don't put away your wand", "Is she dead, Potter?") and the words were coherent. VAD only buys speed; the GPU covers that |
-| 2026-09-22 | P2 aligner: `ctc-forced-aligner` (MahmoudAshraf97, **from git, not PyPI**: the PyPI name is a different ONNX fork) + MMS-300m-1130 | CTC aligners are within a few ms of each other on FA-Bench (~46 ms clean / ~57 ms noisy word MAE); MMS covers ~1,130 languages; `<star>` token absorbs untranscribed speech. WhisperX pins torch~=2.8 + pyannote; NeMo too heavy; MFA needs Kaldi. Weights are CC-BY-NC (private use OK) |
+| 2026-09-23 | P2 aligner, revised: **no aligner package.** MMS-300m-1130 via `transformers` + our own numpy Viterbi (per segment window, `<star>` column at the edges). Fallback to whisper times when a segment's mean token log-prob < −5.0 | Nothing to compile, and nothing that breaks on py3.14. The ctc-forced-aligner C++ ext is only the Viterbi, and windows are a few hundred frames: 1.8 s of numpy per film. The threshold is calibrated on 1,850 Lebowski segments (whisper text median −1.5, wrong text median −4.7). It only catches clear failures (0.5%, e.g. a credits hallucination at −7.5) |
+| 2026-09-22 | P2 aligner (superseded above): `ctc-forced-aligner` (MahmoudAshraf97, **from git, not PyPI**: the PyPI name is a different ONNX fork) + MMS-300m-1130 | CTC aligners are within a few ms of each other on FA-Bench (~46 ms clean / ~57 ms noisy word MAE); MMS covers ~1,130 languages; `<star>` token absorbs untranscribed speech. WhisperX pins torch~=2.8 + pyannote; NeMo too heavy; MFA needs Kaldi. Weights are CC-BY-NC (private use OK) |
 | 2026-09-22 | P3 LLM: Ollama as its own homelab Deployment, `qwen3.5:4b` Q4_K_M (~3.4 GB), `keep_alive: 0` | Schema-constrained JSON (`format`), load/unload on demand, and no CUDA build of llama-cpp-python to maintain. The LLM proposes **edits to flagged words only**; code accepts one only if it's phonetically close or an exact cast/character name. Fails open |
+| 2026-09-23 | LLM edits to **context names need closeness too** (lev ≤ 0.6), not a free pass | Live qwen3.5:4b replaced "dead", "What", "We're", "getting", "Let's", "No" with "Dementors" under the free-pass rule |
+| 2026-09-23 | LLM correction stays **off** (`LLM_CORRECT=false`) pending the eval set | OotP clip, same guardrails: 4b accepted 1 edit, and it was wrong ("on your own" → "own"); 9b and 27b (5090) proposed 0 acceptable edits. Most proposals echo the word with new casing. The known misses need multi-word or semantic edits ("Austin" → "asked you"), which the closeness test is there to block |
+| 2026-09-23 | Hallucination filter (`app/hallucination.py`) instead of VAD | VAD off means Whisper runs over score, where it invents "Thank you.", "PIANO PLAYS", "THE END", "¶¶". no_speech_prob was 0.00 on every segment and the fakes' word probs overlap real lines. Isolation + SDH form do separate them |
 | 2026-09-22 | Stages run one after another and free VRAM in between | A 12 GB card shared with Jellyfin NVENC + immich: peak ~4 GB sequential vs ~9–12.6 GB if everything stays loaded |
 
 ## Architecture (target)
@@ -92,8 +96,8 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       replaced only after a last-moment ownership re-check (`tests/test_regen.py`). Failed regens
       keep their row (`regen_attempts`, capped at `MAX_RETRIES`), and `/process force` upgrades
       a queued regen job instead of being swallowed
-- [ ] Verify on the NAS (ZFS over NFS) that `mv`-ing a file over another updates ctime. The
-      pre-v1 ownership check relies on it
+- [x] Verified on the NAS (ZFS over NFS, 2026-09-23): `mv` of a 2020-mtime file over ours gives
+      ctime = now, so the pre-v1 ctime ownership check holds
 - [x] GPU-safety guard (from the homelab review): on CUDA the model is loaded and smoke-tested
       (1 s of silence end to end, since cuBLAS loads lazily) at startup. A failure sets
       `/healthz` to 503, so the pod restarts, and jobs are dropped without a state row, so a
@@ -115,14 +119,26 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       cu124/cu126 torch build
 - [ ] Prod on the CUDA image + GPU slice (homelab change), `WHISPER_COMPUTE_TYPE=int8_float16`
       (less VRAM on the shared card)
-- [ ] `align.py`: align **per Whisper segment window (±0.5 s)**, not the whole film (the Viterbi
-      pass isn't windowed). Expand numbers with `num2words` (MMS drops digits). Fall back to Whisper
-      word times when a window's alignment score is low (hallucinated text derails alignment).
-      Free the model before the next stage
-- [ ] Image: torch from the PyTorch index (cu129 for CUDA / cpu otherwise) + `transformers~=5.17`,
-      `uroman`, the aligner wheel built `--no-deps` in a builder stage (needs g++). The separate
-      `nvidia-cudnn` pip line can go (CTranslate2 >= 4.6.3 is built without cuDNN; torch brings
-      its own). Expect roughly +4 GB compressed
+- [x] `align.py`: per-segment windows (±0.5 s, ≤0.25 s into a neighbour), num2words for digits,
+      uroman for non-Latin scripts, per-segment fallback, `free()` after each job
+      (`ALIGN_FREE_AFTER_JOB`). OotP clip: 45/45 segments aligned, 2.1 s, ~2 GB VRAM peak (torch),
+      ~4 GB process total
+- [x] Composer retune for aligned times: `CueRules.min_linger = 0.7` (the cue stays ≥ 0.7 s after
+      speech unless the next cue needs the room). Median |end error| was 422–571 ms with no linger,
+      277–467 ms at 0.4, 234–420 ms at 0.7. Onsets unchanged
+- [x] Pre-ship review fixes (2026-09-23):
+      - num2words limited to 20 verified languages + digit cap, and all errors caught (it hung forever
+        on Amharic 7-digit numbers, inside the aligner lock)
+      - hallucination drops gated on confidence (were dropping "OK. OK.", "HELP! HELP!", and
+        confident isolated lines)
+      - failed or mostly-fallback alignment records pipeline 1, not 2, so regen redoes it later; new
+        metrics `subgen_align_segments_total{result}`, `subgen_align_errors_total`,
+        `subgen_hallucinations_dropped_total`
+      - `free()` also clears the cuBLAS workspace (~0.4 GB was left reserved)
+      - the LLM stage is wrapped fail-open
+- [x] Image: torch 2.13.0 from the PyTorch index (cu129 / cpu) **before** requirements.txt, plus
+      `transformers~=5.17`, `uroman`, `num2words` in requirements. No builder stage. CI frees
+      runner disk for the CUDA leg
 - [ ] Dev box note: RTX 5090 (sm_120) — use `int8_float16` (reports of fp16 instability on
       Blackwell), torch cu128/cu129 wheels
 - [ ] Optional: vocal separation for action/music-heavy films. Shot-change snapping (ffmpeg `scdet`)
@@ -135,9 +151,17 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       KV_CACHE_TYPE=q8_0`; requests `think:false temperature:0`, JSON schema in `format`.
       Needs the nvidia-device-plugin time-slicing raised from 4 to 6 (accounting only)
 - [ ] Estimated cost: ~1.5–2.5 min per 2 h film on a 4070S when only flagged windows are sent
-- [ ] Flag low-confidence words (whisper prob + aligner score)
-- [ ] `correct.py`: LLM edits text only, with Jellyfin/TMDB context (title, cast, character names).
-      Must fail open (LLM down → keep the ASR text)
+- [x] Ollama deployed in-cluster (`homelab/apps/ollama`, qwen3.5:4b pulled on start), time-slicing
+      4 → 6 (2026-09-23)
+- [x] Flag low-confidence words: prob < 0.6 (≈10% of words on the OotP clip), plus mid-sentence
+      capitalised non-names and word loops
+- [x] `correct.py` + `context.py`: window planning, schema-constrained edits, code-side acceptance
+      (flagged index, 1–3 words, lev ≤ 0.5 or same Metaphone, names lev ≤ 0.6), fails open,
+      per-film budget. Jellyfin context lookup is written but **untested live**: needs a Jellyfin
+      API key as a SealedSecret
+- [x] Decided on the eval set: **off**. v2 + qwen3.5:27b (5090) gave s+d 10.5 / 11.7 / 11.1% vs
+      10.8 / 11.4 / 11.2% without it (Lebowski / Fargo / Snatch), within run-to-run noise, at 3–4x
+      the runtime. The code stays (`LLM_CORRECT`) for a better model or a names-heavy use case
 - [ ] Optional: second ASR for disagreement flags: parakeet-tdt-0.6b-v3 via `onnx-asr` on **CPU**
       (onnxruntime is already a faster-whisper dep; no NeMo, no VRAM; ~4 min per film). Text only,
       its timings are worse than the aligner's
@@ -152,3 +176,32 @@ Evaluated with `python -m app.evaluate` on the eval set. Lower is better except 
 |---|---|---|---|---|---|
 | v0 (sha-2fae320) | | | | 140.1 (OotP full film) | baseline; OotP has no human ref |
 | v1 (P1, local CPU) | | | | 5.1 (OotP 4 min clip) | 39 cues; clip = 1:30–5:30 of the film; VAD off |
+| v1 prod (4070S) | | | | 7.3 (OotP full film) | 85 s for 2 h 18 min (98x realtime), ~1.1 GB VRAM, 2026-09-23 |
+
+**Eval set, 2026-09-23** (`scripts/run_eval.py`, 5090, int8_float16). Onset = median |error| against
+the *local* offset (rolling median of ±25 anchors; The Rock's ref is for another cut, drifting 225 s,
+and Fargo's ref is incomplete, 609 cues). s+d = substitutions+deletions / ref words, which ignores
+insertions because refs are condensed or incomplete. `wer~` is also in results.json.
+
+| Film | v0 onset | v1 onset | v0 s+d | v1 s+d | v0 QA/100 | v1 QA/100 |
+|---|---|---|---|---|---|---|
+| The Big Lebowski | 429 ms | 230 ms | 14.2% | 11.3% | 136.3 | 8.9 |
+| Fargo | 317 ms | 306 ms | 14.2% | 11.5% | 119.7 | 12.4 |
+| Snatch | 551 ms | 130 ms | 12.2% | 11.0% | 139.6 | 8.6 |
+| The Rock | 522 ms | 386 ms | 27.2% | 11.7% | 167.8 | 10.7 |
+| Interstellar | 128 ms | 142 ms | 20.4% | 10.4% | 125.9 | 6.6 |
+
+| Film | v2 onset | ≤250 ms | v2 s+d | v2 QA/100 |
+|---|---|---|---|---|
+| The Big Lebowski | 163 ms | 62.0% | 10.6% | 10.5 |
+| Fargo | 280 ms | 45.1% | 11.0% | 14.3 |
+| Snatch | 100 ms | 85.6% | 11.7% | 9.3 |
+| The Rock | 358 ms | 35.8% | 11.6% | 12.8 |
+| Interstellar | 82 ms | 91.9% | 10.3% | 7.7 |
+
+v2 = v1 + forced alignment + hallucination filter; `min_linger` 0.7 on top leaves onsets as they are
+and improves ends (see Phase 2). QA/100 rose from v1 (8.6–12.4) because aligned words expose real
+pauses, so there are more, faster cues (`cps_over_max`).
+
+v1 also adds hallucinated lines over score-only stretches ("Thank you.", "PIANO PLAYS", "THE END"
+in the Fargo/Interstellar intros): the cost of VAD off. See `app/hallucination.py`.

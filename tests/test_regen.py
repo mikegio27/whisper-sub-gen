@@ -18,7 +18,13 @@ from app.config import settings
 _STATE = tempfile.TemporaryDirectory()
 settings.state_dir = _STATE.name
 
-from app.transcriber import ModelLoadError, OutputConflict, place_output  # noqa: E402
+from app.transcriber import (  # noqa: E402
+    PIPELINE_VERSION,
+    ModelLoadError,
+    OutputConflict,
+    _effective_pipeline,
+    place_output,
+)
 from app.worker import Job, Worker  # noqa: E402
 
 
@@ -248,6 +254,19 @@ class ModelGuardTest(unittest.TestCase):
             self.assertRaises(ModelLoadError),
         ):
             t._load_model()
+
+
+class EffectivePipelineTest(unittest.TestCase):
+    """A file whose alignment failed must not claim v2, or regen never redoes it."""
+
+    def test_versions(self):
+        self.assertEqual(_effective_pipeline({"enabled": False}), 1)
+        self.assertEqual(_effective_pipeline({"enabled": True, "error": "OOM"}), 1)
+        self.assertEqual(_effective_pipeline({"enabled": True, "segments": 100, "aligned": 30}), 1)
+        self.assertEqual(
+            _effective_pipeline({"enabled": True, "segments": 100, "aligned": 98}),
+            PIPELINE_VERSION,
+        )
 
 
 if __name__ == "__main__":

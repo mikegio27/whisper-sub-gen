@@ -23,6 +23,11 @@ class CueRules:
     # How long a cue may stay up after the last word ends, when nothing follows
     # soon. Viewers finish reading just after the speech stops.
     max_linger: float = 1.0
+    # ...and at least this long, unless the next cue needs the room. With
+    # forced-aligned word ends a cue otherwise vanishes the instant speech
+    # stops. Eval set 2026-09-23, median |end error| vs human subs:
+    # 0 -> 422-571 ms, 0.4 -> 277-467 ms, 0.7 -> 234-420 ms.
+    min_linger: float = 0.7
     # A silence at least this long between two words always starts a new cue.
     split_pause: float = 0.6
     # A single word longer than this is a timestamp artefact (whisper/VAD

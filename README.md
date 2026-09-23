@@ -60,6 +60,11 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `CONDITION_ON_PREVIOUS_TEXT` | `false` | Feed the previous window's text to the next; `true` lets one hallucination repeat |
 | `HALLUCINATION_SILENCE_THRESHOLD` | `2.0` | Skip silences longer than this (s) around suspected hallucinations; 0 disables |
 | `AUDIO_CENTER_CHANNEL` | `true` | Use only the center (dialogue) channel of 5.1/7.1 tracks; falls back to a downmix when it's silent |
+| `ALIGN_WORDS` | `true` | Re-time whisper's words with CTC forced alignment (ROADMAP P2). Segments that can't be aligned, or any aligner error, keep whisper's timings; needs torch + transformers in the image |
+| `ALIGN_MODEL` | `MahmoudAshraf/mms-300m-1130-forced-aligner` | HF id of the wav2vec2 CTC aligner (cached in `MODEL_DIR`); runs on `WHISPER_DEVICE`, fp16 on CUDA |
+| `ALIGN_MIN_SCORE` | `-5.0` | Mean per-token log-prob below which a segment keeps whisper's timings (~0.5% of segments) |
+| `ALIGN_BATCH_SECONDS` | `120` | Padded audio per aligner forward pass; bounds its VRAM |
+| `ALIGN_FREE_AFTER_JOB` | `true` | Unload the aligner after each file (the stages share one GPU) |
 | `SUBTITLE_TAG` | *(empty)* | Extra tag in output name: `<stem><tag>.<lang>.srt` |
 | `OVERWRITE_EXISTING_OUTPUT` | `false` | Don't treat an existing `<stem><tag>.<lang>.srt` as done. Our own output is also an external sub, so pair with `SKIP_IF_EXTERNAL_SUBS=false` to actually regenerate |
 | `REGENERATE_OUTDATED` | `false` | Redo subs this service wrote with an older pipeline version, only if the file is still exactly what we wrote and no other sub sits next to it |
@@ -77,6 +82,14 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `LOG_LEVEL` | `INFO` | |
 | `PROGRESS_LOG_SECONDS` | `60` | Log transcription progress (%, speed, ETA) every N seconds; 0 disables |
 | `SHUTDOWN_MODE` | `abort` | On SIGTERM: `abort` cancels the active job and deletes its partial output (retried after restart); `finish` completes the active file first — size the pod's `terminationGracePeriodSeconds` to cover a full movie |
+| `LLM_CORRECT` | `false` | Local-LLM word correction (ROADMAP P3): Ollama proposes fixes for flagged words, code accepts only sound-alike edits or exact character names. Fails open. Needs `OLLAMA_URL` |
+| `OLLAMA_URL` | *(empty)* | Ollama base URL, e.g. `http://ollama.ollama.svc.cluster.local:11434` |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Model tag; unloaded (`keep_alive: 0`) after each film |
+| `LLM_FLAG_PROB` | `0.6` | Words whisper scores below this get a second look (~10% of words); capitalised unknown names and 3x repeats are flagged regardless |
+| `LLM_TIMEOUT_S` | `120` | Per request (the first one loads the model) |
+| `LLM_BUDGET_S` | `900` | Per film: stop sending windows after this long and keep the rest as transcribed |
+| `JELLYFIN_URL` | *(empty)* | For character names/overview as LLM context, e.g. `http://jellyfin.jellyfin.svc.cluster.local:8096`. Without it only the title/year from the path is used |
+| `JELLYFIN_API_KEY` | *(empty)* | Jellyfin API key. **Secret**: supply it from a SealedSecret (`secretRef`), never the ConfigMap |
 
 ## API
 
