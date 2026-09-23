@@ -7,11 +7,57 @@ on:
   pull_request:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # matches the Dockerfile base image
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt ruff==0.16.1 # keep in step with local ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format
+        run: ruff format --check .
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # CPU image: sha-<7>, latest, <semver>
+          - variant: cpu
+            with_cuda: "false"
+            latest: auto
+            tags: |
+              type=semver,pattern={{version}}
+              type=sha,format=short
+              type=raw,value=latest,enable={{is_default_branch}}
+          # GPU image (cuBLAS/cuDNN baked in): sha-<7>-cuda, cuda, <semver>-cuda
+          - variant: cuda
+            with_cuda: "true"
+            latest: "false"
+            tags: |
+              type=semver,pattern={{version}},suffix=-cuda
+              type=sha,format=short,suffix=-cuda
+              type=raw,value=cuda,enable={{is_default_branch}}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,16 +74,16 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository_owner }}/whisper-sub-gen
-          tags: |
-            type=semver,pattern={{version}}
-            type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+          flavor: latest=${{ matrix.latest }}
+          tags: ${{ matrix.tags }}
 
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: WITH_CUDA=${{ matrix.with_cuda }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Separate cache scopes so the two variants don't evict each other.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
