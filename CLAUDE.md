@@ -94,7 +94,8 @@ The full env var table is in `README.md`. It is sourced from `Settings` in `app/
 both in sync when adding a field (the table currently lists every field).
 `OVERWRITE_EXISTING_OUTPUT=true` only helps together with `SKIP_IF_EXTERNAL_SUBS=false`, because
 our own .srt also counts as an external sub. Prod values live in `../homelab/apps/whisper-sub-gen/configmap.yaml`:
-`large-v3-turbo`, `WHISPER_DEVICE=cpu` (moving to the CUDA image, see ROADMAP Phase 2), `CPU_THREADS=12` (capped so Jellyfin transcodes aren't
+`large-v3-turbo`, `WHISPER_DEVICE=cuda` + `int8_float16` on one GPU time-slice (the `-cuda` image),
+`REGENERATE_OUTDATED=true`, memory limit 12Gi (safe because of `ASR_CHUNK_S` chunking), `CPU_THREADS=12` (capped so Jellyfin transcodes aren't
 starved), `SCAN_INTERVAL_MINUTES=360`, `SHUTDOWN_MODE=abort`, and no `WORK_WINDOW`. There is no
 `API_KEY` yet (the secretRef is commented out, waiting on a SealedSecret). `ingressroute.yaml` exists
 but is not enabled in kustomization. In-cluster callers use
