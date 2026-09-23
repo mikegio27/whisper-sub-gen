@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # Feeding each window the previous text makes one hallucination repeat for
     # minutes (the "Is she dead?" x3 loops). Off costs little on films.
     condition_on_previous_text: bool = False
+    # Transcribe in chunks of about this many seconds, cut at quiet points.
+    # faster-whisper's feature extraction holds ~3.3 GB per hour of input in
+    # RAM; 1200 s keeps that near 1.1 GB whatever the film's length. 0 = one
+    # pass over the whole film.
+    asr_chunk_s: int = 1200
     # Skip silent stretches longer than this (s) around a suspected
     # hallucination. Needs word timestamps, which the pipeline always uses.
     hallucination_silence_threshold: float = 2.0

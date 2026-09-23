@@ -15,9 +15,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 from .align import Aligner, AlignSegment
-from .audio import SAMPLE_RATE, load_audio
+from .audio import SAMPLE_RATE, chunk_bounds, load_audio
 from .config import settings
 from .correct import correct_video
 from .cues import Word, compose
@@ -201,21 +202,8 @@ class Transcriber:
             with self.progress._lock:
                 self.progress.duration_s = duration
 
-            segments, info = model.transcribe(
-                audio,
-                task=settings.task,
-                language=settings.language or None,
-                beam_size=settings.beam_size,
-                condition_on_previous_text=settings.condition_on_previous_text,
-                word_timestamps=True,
-                hallucination_silence_threshold=settings.hallucination_silence_threshold or None,
-                vad_filter=settings.vad_filter,
-                vad_parameters={
-                    "threshold": settings.vad_threshold,
-                    "min_silence_duration_ms": settings.vad_min_silence_ms,
-                    "speech_pad_ms": settings.vad_speech_pad_ms,
-                },
-            )
+            bounds = chunk_bounds(audio, settings.asr_chunk_s)
+            segments, info = self._asr(model, audio, bounds)
             lang = settings.language or info.language or "und"
             with self.progress._lock:
                 self.progress.language = lang
@@ -339,6 +327,56 @@ class Transcriber:
             stats["mean_score"],
         )
         return res.words, {"enabled": True, **stats}
+
+    def _asr(self, model, audio, bounds: list[tuple[int, int]]):
+        """Run faster-whisper chunk by chunk (see audio.chunk_bounds), yielding
+        segments with film-relative times. The first chunk detects the language;
+        later chunks reuse it so a quiet or foreign-dialogue stretch can't flip
+        it mid-film. Returns (segment generator, first chunk's info)."""
+        kwargs = {
+            "task": settings.task,
+            "beam_size": settings.beam_size,
+            "condition_on_previous_text": settings.condition_on_previous_text,
+            "word_timestamps": True,
+            "hallucination_silence_threshold": settings.hallucination_silence_threshold or None,
+            "vad_filter": settings.vad_filter,
+            "vad_parameters": {
+                "threshold": settings.vad_threshold,
+                "min_silence_duration_ms": settings.vad_min_silence_ms,
+                "speech_pad_ms": settings.vad_speech_pad_ms,
+            },
+        }
+        s0, e0 = bounds[0]
+        first, info = model.transcribe(audio[s0:e0], language=settings.language or None, **kwargs)
+        language = settings.language or info.language
+
+        def shifted():
+            for i, (s, e) in enumerate(bounds):
+                if i == 0:
+                    segs = first
+                else:
+                    segs, _ = model.transcribe(audio[s:e], language=language, **kwargs)
+                off = s / SAMPLE_RATE
+                for seg in segs:
+                    yield SimpleNamespace(
+                        start=seg.start + off,
+                        end=seg.end + off,
+                        words=[
+                            SimpleNamespace(
+                                start=w.start + off,
+                                end=w.end + off,
+                                word=w.word,
+                                probability=w.probability,
+                            )
+                            for w in seg.words or ()
+                        ],
+                    )
+
+        if len(bounds) > 1:
+            log.info(
+                "transcribing in %d chunks (ASR_CHUNK_S=%s)", len(bounds), settings.asr_chunk_s
+            )
+        return shifted(), info
 
     def _collect_words(
         self, video: Path, segments, duration: float, started: float

@@ -144,6 +144,19 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
 - [ ] Optional: vocal separation for action/music-heavy films. Shot-change snapping (ffmpeg `scdet`)
 - [ ] Optional: vocal separation for action/music-heavy films. Shot-change snapping (ffmpeg `scdet`)
 
+### Ops findings after v2 went live (2026-09-23)
+- [x] **OOMKilled on long films.** With VAD off, faster-whisper builds the mel spectrogram for the
+      whole input in one pass (~3.3 GB per hour, measured). The Godfather Part II (3 h 18 min) died
+      at 12Gi, and an OOM kill writes no state row, so it would be retried after every restart.
+      Hotfix: limit 24Gi. Fix: `ASR_CHUNK_S=1200`, ~20 min chunks cut at the quietest 0.5 s near
+      each mark, language fixed from the first chunk. Godfather II peak RSS is now 4.3 GB, 78x
+      realtime, with clean cuts (checked cues at every boundary)
+- [ ] **Whisper's no-punctuation mode**: stretches come out all lowercase with no punctuation
+      ("i'm gonna leave here tonight"). 0.5–2.5% of cues per film, in v1 and v2 alike (lowercase "i"
+      as a marker: The Rock 43/1792, Lebowski 26/1938). Candidates: detect the run and re-decode that
+      window with a punctuated `initial_prompt`; a truecasing pass; or an LLM punctuation-restore
+      mode (words unchanged, which suits the existing acceptance checks better than word edits)
+
 ### Phase 3: Word validation (local LLM)
 - [x] Pick the serving option and model: Ollama v0.34.x as `homelab/apps/ollama`, `qwen3.5:4b`
       Q4_K_M (A/B `qwen3.5:9b` / Gemma-4-E4B if the eval shows headroom). Env

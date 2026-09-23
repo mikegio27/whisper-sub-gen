@@ -93,5 +93,29 @@ class DecodeTest(unittest.TestCase):
         self.assertNotIn("-af", run.call_args_list[1].args[0])
 
 
+class ChunkBoundsTest(unittest.TestCase):
+    def test_short_input_is_one_chunk(self):
+        import numpy as np
+
+        a = np.ones(16_000 * 100, dtype=np.float32)
+        self.assertEqual(audio.chunk_bounds(a, chunk_s=100), [(0, len(a))])
+        self.assertEqual(audio.chunk_bounds(a, chunk_s=0), [(0, len(a))])
+
+    def test_cuts_at_the_quiet_spot_and_covers_everything(self):
+        import numpy as np
+
+        sr = 16_000
+        a = np.full(sr * 300, 0.5, dtype=np.float32)  # 5 min of "speech"
+        a[sr * 110 : sr * 111] = 0.0  # 1 s of silence 10 s after the 100 s target
+        a[sr * 215 : sr * 216] = 0.0
+        b = audio.chunk_bounds(a, chunk_s=100, search_s=30)
+        self.assertEqual(b[0][0], 0)
+        self.assertEqual(b[-1][1], len(a))
+        for (_, e), (s, _) in zip(b, b[1:], strict=False):
+            self.assertEqual(e, s)  # contiguous, no gaps or overlap
+        self.assertTrue(sr * 110 <= b[0][1] <= sr * 111, b)
+        self.assertTrue(sr * 215 <= b[1][1] <= sr * 216, b)
+
+
 if __name__ == "__main__":
     unittest.main()

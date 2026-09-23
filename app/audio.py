@@ -184,3 +184,38 @@ _ISO639_1_TO_2 = {
 
 def _iso639_2(code: str) -> str:
     return _ISO639_1_TO_2.get(code.lower(), code.lower())
+
+
+def chunk_bounds(
+    samples, chunk_s: float, search_s: float = 30.0, sr: int = SAMPLE_RATE
+) -> list[tuple[int, int]]:
+    """Split a film into ~chunk_s pieces for the ASR, cutting at the quietest
+    0.5 s within ±search_s of each target, so no word is cut in half.
+
+    faster-whisper builds the mel spectrogram for its whole input in one numpy
+    pass, ~3.3 GB per hour of audio (measured 2026-09-23; a 3 h 18 min film was
+    OOMKilled at 12Gi). Chunking bounds that to one chunk's worth. A tail up to
+    25% longer than chunk_s stays in the last chunk rather than becoming a
+    sliver. Returns (start, end) sample indices covering the whole input."""
+    import numpy as np
+
+    n = len(samples)
+    step = int(chunk_s * sr)
+    if step <= 0 or n <= step * 1.25:
+        return [(0, n)]
+    frame = sr // 2
+    reach = int(search_s * sr)
+    cuts = [0]
+    while n - cuts[-1] > step * 1.25:
+        target = cuts[-1] + step
+        lo = max(cuts[-1] + frame, target - reach)
+        hi = min(n - frame, target + reach)
+        k = (hi - lo) // frame
+        if k < 1:
+            cuts.append(target)
+            continue
+        frames = np.asarray(samples[lo : lo + k * frame], dtype=np.float64).reshape(k, frame)
+        quietest = int(np.argmin(np.mean(frames * frames, axis=1)))
+        cuts.append(lo + quietest * frame + frame // 2)
+    cuts.append(n)
+    return list(zip(cuts[:-1], cuts[1:], strict=True))

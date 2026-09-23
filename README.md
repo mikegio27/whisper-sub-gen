@@ -57,6 +57,7 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `VAD_THRESHOLD` | `0.5` | Silero speech probability threshold |
 | `VAD_MIN_SILENCE_MS` | `500` | Silence that splits speech chunks (faster-whisper's default 2000 glues speech across music) |
 | `VAD_SPEECH_PAD_MS` | `200` | Padding around each speech chunk |
+| `ASR_CHUNK_S` | `1200` | Transcribe in ~N-second chunks cut at quiet points, which bounds RAM (whole-film feature extraction takes ~3.3 GB/hour); 0 = one pass |
 | `CONDITION_ON_PREVIOUS_TEXT` | `false` | Feed the previous window's text to the next; `true` lets one hallucination repeat |
 | `HALLUCINATION_SILENCE_THRESHOLD` | `2.0` | Skip silences longer than this (s) around suspected hallucinations; 0 disables |
 | `AUDIO_CENTER_CHANNEL` | `true` | Use only the center (dialogue) channel of 5.1/7.1 tracks; falls back to a downmix when it's silent |
