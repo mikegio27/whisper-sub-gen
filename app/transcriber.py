@@ -36,11 +36,7 @@ class Progress:
 
     def snapshot(self) -> dict:
         with self._lock:
-            pct = (
-                round(100 * self.transcribed_s / self.duration_s, 1)
-                if self.duration_s
-                else 0.0
-            )
+            pct = round(100 * self.transcribed_s / self.duration_s, 1) if self.duration_s else 0.0
             return {
                 "path": self.path,
                 "language": self.language,
@@ -48,9 +44,7 @@ class Progress:
                 "transcribed_s": round(self.transcribed_s, 1),
                 "percent": min(pct, 100.0),
                 "segments": self.segments,
-                "elapsed_s": round(time.time() - self.started_at, 1)
-                if self.started_at
-                else 0.0,
+                "elapsed_s": round(time.time() - self.started_at, 1) if self.started_at else 0.0,
             }
 
 
@@ -194,12 +188,19 @@ class Transcriber:
                                 log.info(
                                     "progress %s: %.0f%% (%.0f/%.0fs), "
                                     "%.1fx realtime, ~%.1f min left",
-                                    video.name, pct, seg.end, duration, speed, eta_min,
+                                    video.name,
+                                    pct,
+                                    seg.end,
+                                    duration,
+                                    speed,
+                                    eta_min,
                                 )
                             else:
                                 log.info(
                                     "progress %s: %.0fs transcribed, %.1fx realtime",
-                                    video.name, seg.end, speed,
+                                    video.name,
+                                    seg.end,
+                                    speed,
                                 )
 
                 if count == 0:

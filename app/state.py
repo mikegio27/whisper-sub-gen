@@ -100,8 +100,17 @@ class StateStore:
                     updated_at = datetime('now')
                 """,
                 (
-                    path, size, mtime, status, reason, language, subtitle,
-                    model, duration_s, elapsed_s, 1 if bump_attempts else 0,
+                    path,
+                    size,
+                    mtime,
+                    status,
+                    reason,
+                    language,
+                    subtitle,
+                    model,
+                    duration_s,
+                    elapsed_s,
+                    1 if bump_attempts else 0,
                     bump_attempts,
                 ),
             )
@@ -127,7 +136,5 @@ class StateStore:
 
     def counts(self) -> dict[str, int]:
         with self._lock:
-            cur = self._conn.execute(
-                "SELECT status, COUNT(*) AS n FROM files GROUP BY status"
-            )
+            cur = self._conn.execute("SELECT status, COUNT(*) AS n FROM files GROUP BY status")
             return {r["status"]: r["n"] for r in cur.fetchall()}

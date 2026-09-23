@@ -35,9 +35,7 @@ async def lifespan(app: FastAPI):
     metrics.PROCESSING.set_function(
         lambda: 1 if worker.transcriber.progress.snapshot()["path"] else 0
     )
-    metrics.CURRENT_PROGRESS.set_function(
-        lambda: worker.transcriber.progress.snapshot()["percent"]
-    )
+    metrics.CURRENT_PROGRESS.set_function(lambda: worker.transcriber.progress.snapshot()["percent"])
     worker.start()
     yield
     worker.stop()

@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     media_dirs: str = "/media"  # comma-separated list of mount points to scan
     video_extensions: str = "mkv,mp4,avi,mov,m4v,ts,webm,wmv,flv,mpg,mpeg"
     ignore_patterns: str = (
-        "*/extras/*,*/trailers/*,*/backdrops/*,*/trickplay/*,"
-        "*-trailer.*,*sample*,*/theme.*"
+        "*/extras/*,*/trailers/*,*/backdrops/*,*/trickplay/*,*-trailer.*,*sample*,*/theme.*"
     )
     # Skip files modified more recently than this (still being copied/imported).
     file_min_age_minutes: int = 10
@@ -114,9 +113,7 @@ class Settings(BaseSettings):
     @property
     def extension_set(self) -> set[str]:
         return {
-            e.strip().lstrip(".").lower()
-            for e in self.video_extensions.split(",")
-            if e.strip()
+            e.strip().lstrip(".").lower() for e in self.video_extensions.split(",") if e.strip()
         }
 
     @property

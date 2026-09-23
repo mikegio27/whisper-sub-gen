@@ -51,9 +51,7 @@ class Worker:
     # --- lifecycle ---
 
     def start(self) -> None:
-        self._threads = [
-            threading.Thread(target=self._work_loop, name="worker", daemon=True)
-        ]
+        self._threads = [threading.Thread(target=self._work_loop, name="worker", daemon=True)]
         if settings.run_mode == "continuous":
             self._threads.append(
                 threading.Thread(target=self._scan_loop, name="scanner", daemon=True)
@@ -79,8 +77,7 @@ class Worker:
             active = self._current
         if active:
             log.info(
-                "shutdown: %s active job %s (%d queued jobs dropped, "
-                "re-queued on next scan)",
+                "shutdown: %s active job %s (%d queued jobs dropped, re-queued on next scan)",
                 "aborting" if settings.shutdown_mode == "abort" else "finishing",
                 active.path.name,
                 self._queue.qsize(),
@@ -105,9 +102,7 @@ class Worker:
     ) -> Job | None:
         with self._lock:
             key = str(path)
-            if key in self._queued_paths or (
-                self._current and str(self._current.path) == key
-            ):
+            if key in self._queued_paths or (self._current and str(self._current.path) == key):
                 return None
             job = Job(
                 id=next(self._job_ids),
@@ -189,9 +184,7 @@ class Worker:
                     continue
                 needs, reason = check_needs_subtitles(video)
                 if not needs:
-                    self.store.record(
-                        str(video), st.st_size, st.st_mtime, "skipped", reason=reason
-                    )
+                    self.store.record(str(video), st.st_size, st.st_mtime, "skipped", reason=reason)
                     skipped += 1
                     continue
                 if self.enqueue(video, source="scan"):
@@ -260,7 +253,10 @@ class Worker:
 
         log.info(
             "processing %s (job %d, via %s, %d more queued)",
-            video, job.id, job.source, self._queue.qsize(),
+            video,
+            job.id,
+            job.source,
+            self._queue.qsize(),
         )
         try:
             result = self.transcriber.transcribe(video)
@@ -272,8 +268,12 @@ class Worker:
         except Exception as exc:
             log.exception("transcription failed for %s", video)
             self.store.record(
-                str(video), st.st_size, st.st_mtime, "failed",
-                reason=str(exc)[:500], model=settings.whisper_model,
+                str(video),
+                st.st_size,
+                st.st_mtime,
+                "failed",
+                reason=str(exc)[:500],
+                model=settings.whisper_model,
                 bump_attempts=True,
             )
             metrics.FAILED.inc()
@@ -281,16 +281,24 @@ class Worker:
             return
 
         self.store.record(
-            str(video), st.st_size, st.st_mtime, "done",
-            language=result["language"], subtitle=result["subtitle"],
+            str(video),
+            st.st_size,
+            st.st_mtime,
+            "done",
+            language=result["language"],
+            subtitle=result["subtitle"],
             model=settings.whisper_model,
-            duration_s=result["duration_s"], elapsed_s=result["elapsed_s"],
+            duration_s=result["duration_s"],
+            elapsed_s=result["elapsed_s"],
         )
         metrics.PROCESSED.inc()
         metrics.MEDIA_SECONDS.inc(result["duration_s"])
         log.info(
             "job %d done: %s [%s] — %d files left in queue",
-            job.id, video.name, result["language"], self._queue.qsize(),
+            job.id,
+            video.name,
+            result["language"],
+            self._queue.qsize(),
         )
         self._notify({"status": "done", "path": str(video), **result})
 

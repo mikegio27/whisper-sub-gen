@@ -111,10 +111,7 @@ def check_needs_subtitles(video: Path) -> tuple[bool, str]:
     if not settings.overwrite_existing_output:
         # Anything we (or a previous run) already wrote for any language.
         pattern = f"{video.stem}{settings.subtitle_tag}.{lang}.srt"
-        existing = [
-            s for s in external_subtitles(video)
-            if fnmatch.fnmatch(s.name, pattern)
-        ]
+        existing = [s for s in external_subtitles(video) if fnmatch.fnmatch(s.name, pattern)]
         if existing:
             return False, f"output already exists: {existing[0].name}"
 
