@@ -248,6 +248,16 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       header is recorded per film (`corrected.backends`). No key = direct Ollama, unchanged.
       `LLM_CORRECT` stays false (Phase 3 decision).
 
+- [x] **v4 live** (sha-c619e9f-cuda, 2026-09-24). The pod runs with NVIDIA_DRIVER_CAPABILITIES incl.
+      `video`; shot detection runs on NVDEC in prod (The Net: 1327 cuts, 92 starts / 234 ends
+      snapped). dozai path verified from the pod: 200 with the token, 401 without; `dozai client
+      list` shows `whisper-sub-gen` LAST USED.
+- [ ] **Shot detection cost on the 4070S**: 178 s for a 1 h 54 min film (5090: ~60 s), so the job
+      waited 79 s for it: 103 → 178 s per film (+73%, not the +20% seen on the 5090). Tolerable for
+      the one-off regen backlog. Watch whether it competes with Jellyfin transcodes for NVDEC. If
+      it does, options: skip snapping when detection isn't done by compose time, run detection
+      only for new files, or `SHOT_DECODE=cpu` at nice 19
+
 ### Phase 3: Word validation (local LLM)
 - [x] Pick the serving option and model: Ollama v0.34.x as `homelab/apps/ollama`, `qwen3.5:4b`
       Q4_K_M (A/B `qwen3.5:9b` / Gemma-4-E4B if the eval shows headroom). Env
