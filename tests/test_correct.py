@@ -441,5 +441,41 @@ class Jellyfin(unittest.TestCase):
             ctxmod._cache.clear()
 
 
+class DozaiAuthTest(unittest.TestCase):
+    """dozai integration (dozai docs/integrations/whisper-sub-gen.md)."""
+
+    class Resp(io.BytesIO):
+        def __init__(self, payload, backend=None):
+            super().__init__(json.dumps(payload).encode())
+            self.headers = {"X-Dozai-Backend": backend} if backend else {}
+
+    def test_bearer_header_only_when_key_set(self):
+        seen = []
+
+        def fake(req, timeout):
+            seen.append(req.get_header("Authorization"))
+            return self.Resp({"message": {"content": "{}"}})
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake):
+            C._post("http://dozai:8080/ollama/auto", {"model": "m"}, 5, api_key="dzai_x")
+            C._post("http://o:11434", {"model": "m"}, 5)
+        self.assertEqual(seen, ["Bearer dzai_x", None])
+
+    def test_backend_header_is_reported(self):
+        with mock.patch(
+            "urllib.request.urlopen", return_value=self.Resp({"done": True}, "desktop-5090")
+        ):
+            _, backend = C._post("http://dozai:8080/ollama/auto", {}, 5, api_key="k")
+        self.assertEqual(backend, "desktop-5090")
+        with mock.patch("urllib.request.urlopen", return_value=self.Resp({"done": True})):
+            self.assertIsNone(C._post("http://o:11434", {}, 5)[1])
+
+    def test_dozai_unload_reply_is_fine(self):
+        reply = {"done": True, "done_reason": "unload"}
+        with mock.patch("urllib.request.urlopen", return_value=self.Resp(reply)) as m:
+            C._unload("http://dozai:8080/ollama/auto", "m", api_key="k")
+        self.assertEqual(m.call_args.args[0].get_header("Authorization"), "Bearer k")
+
+
 if __name__ == "__main__":
     unittest.main()

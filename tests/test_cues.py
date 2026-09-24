@@ -177,7 +177,7 @@ class TargetedTest(CueInvariants, unittest.TestCase):
         self.assertLess(fig.duration, 5.0)
         self.assertLessEqual(fig.end, 157.5 + R.max_word_duration + R.max_linger + EPS)
         self.assertTrue(cues[-1].text.startswith("Well,"))
-        self.assertAlmostEqual(cues[-1].start, 280.92)
+        self.assertAlmostEqual(cues[-1].start, 280.92 - R.lead_in)
 
     def test_weak_word_not_at_cue_end(self):
         # 88 chars: must be two cues. A char-greedy split lands right after "the".
@@ -282,25 +282,40 @@ class TargetedTest(CueInvariants, unittest.TestCase):
         self.assertAlmostEqual(c.duration, rules.min_duration, places=3)
 
     def test_gap_and_nudge(self):
+        # The gap/nudge mechanics in isolation: no linger, no lead-in.
+        rules = CueRules(min_linger=0.0, lead_in=0.0)
         # Room for min_duration before the next cue: nothing moves.
         ws = words_from("Oh.", per_word=0.1) + words_from("Who is there?", start=1.3)
-        cues = compose(ws)
+        cues = compose(ws, rules)
         self.check(cues)
         self.assertAlmostEqual(cues[0].duration, R.min_duration, places=3)
         self.assertAlmostEqual(cues[1].start, 1.3, places=3)
         # 0.75 - 0.083 = 0.667 s free, 0.833 needed: the next cue's start is pushed by at
         # most 0.1 s, then min_gap wins and this cue is squeezed.
         ws = words_from("Oh.", per_word=0.1) + words_from("Who is there?", start=0.75)
-        cues = compose(ws)
+        cues = compose(ws, rules)
         self.check(cues)
         self.assertEqual(len(cues), 2)
         self.assertAlmostEqual(cues[1].start, 0.85, places=3)
         self.assertAlmostEqual(cues[0].end, 0.85 - R.min_gap, delta=0.0015)
         # Only a little short: the nudge covers it fully.
         ws = words_from("Oh.", per_word=0.1) + words_from("Who is there?", start=0.88)
-        cues = compose(ws)
+        cues = compose(ws, rules)
         self.assertAlmostEqual(cues[0].duration, R.min_duration, places=3)
         self.assertAlmostEqual(cues[1].start, 0.833 + R.min_gap, places=3)
+
+    def test_lead_in(self):
+        # A cue shows lead_in before its first word...
+        ws = words_from("Hello there.", start=5.0)
+        self.assertAlmostEqual(compose(ws)[0].start, 5.0 - R.lead_in, places=3)
+        # ...never before 0...
+        self.assertAlmostEqual(compose(words_from("Hi.", start=0.05))[0].start, 0.0, places=3)
+        # ...and never into the previous cue's min_gap.
+        a = words_from("Go now.", per_word=0.5)
+        b = words_from("Come back tomorrow, bring the family.", start=a[-1].end + 3.0)
+        first, second = compose(a + b)[:2]
+        self.assertGreaterEqual(round(second.start - first.end, 3), R.min_gap)
+        self.assertLessEqual(second.start, b[0].start)
 
     def test_max_duration_cap(self):
         # 81 chars fits one cue by length, but it takes 8.8 s to say.

@@ -35,7 +35,8 @@ video, out = Path(sys.argv[2]), Path(sys.argv[3])
 import app.transcriber as t
 t.output_path = lambda v, lang: out
 r = t.Transcriber().transcribe(video)
-keep = ("elapsed_s", "language", "aligned", "corrected", "hallucinations_dropped", "punct_repair")
+keep = ("elapsed_s", "language", "aligned", "corrected", "hallucinations_dropped", "punct_repair",
+        "shots")
 print(json.dumps({k: r[k] for k in keep if k in r}, default=str))
 """
 
@@ -47,6 +48,25 @@ def load_set(path: Path) -> list[tuple[str, str]]:
             video, ref = line.split("\t")
             pairs.append((video, ref))
     return pairs
+
+
+def resolve_ref(args, video_rel: str, ref_rel: str) -> Path:
+    """A sidecar path, or `embedded:<stream index>`: a text subtitle stream inside
+    the video itself (same release, so no cut/framerate mismatch). Embedded refs
+    are extracted once into OUT/.refs/ rather than committed: they're someone
+    else's subtitle text."""
+    if not ref_rel.startswith("embedded:"):
+        return args.media_root / ref_rel
+    index = int(ref_rel.split(":", 1)[1])
+    cache = args.out / ".refs" / f"{Path(video_rel).stem}.{index}.srt"
+    if not cache.exists():
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(args.media_root / video_rel),
+             "-map", f"0:{index}", "-c:s", "srt", str(cache)],
+            check=True, timeout=600,
+        )  # fmt: skip
+    return cache
 
 
 def main() -> None:
@@ -97,7 +117,7 @@ def main() -> None:
                 print(proc.stderr[-2000:], file=sys.stderr)
                 continue
             meta = json.loads(proc.stdout.strip().splitlines()[-1])
-        hyp, ref = load_srt(hyp_path), load_srt(args.media_root / ref_rel)
+        hyp, ref = load_srt(hyp_path), load_srt(resolve_ref(args, video_rel, ref_rel))
         c = compare(hyp, ref)
         results[name] = {"meta": meta, "compare": c, "qa": score(hyp)}
         on = c["onset_local"]

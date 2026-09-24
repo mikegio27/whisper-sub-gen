@@ -574,24 +574,36 @@ def apply_edits(words: Sequence[Word], edits: dict[int, str]) -> list[Word]:
 # --- driver -------------------------------------------------------------------------------
 
 
-def _post(url: str, body: dict, timeout: float) -> dict:
+def _post(url: str, body: dict, timeout: float, api_key: str = "") -> tuple[dict, str | None]:
+    """POST to `{url}/api/chat`. Returns (reply, backend): `backend` is dozai's
+    X-Dozai-Backend header (which GPU answered) when going through dozai, else None.
+
+    `api_key` is a dozai client token (dozai docs/integrations/whisper-sub-gen.md):
+    sent as a Bearer header when set; empty = talking to Ollama directly."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
         url.rstrip("/") + "/api/chat",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.load(resp)
+        resp_headers = getattr(resp, "headers", None)
+        backend = resp_headers.get("X-Dozai-Backend") if resp_headers is not None else None
     if not isinstance(data, dict):
         raise ValueError("reply is not an object")
-    return data
+    return data, backend
 
 
-def _unload(url: str, model: str) -> None:
-    """Best effort: ask Ollama to drop the model now (a request with no messages)."""
+def _unload(url: str, model: str, api_key: str = "") -> None:
+    """Best effort: ask Ollama to drop the model now (a request with no messages).
+    dozai answers this itself ({"done_reason": "unload"}) and unloads on its own
+    per-GPU policy instead, so chat users on the same GPU aren't cut off."""
     try:
-        _post(url, {"model": model, "messages": [], "keep_alive": 0}, 10.0)
+        _post(url, {"model": model, "messages": [], "keep_alive": 0}, 10.0, api_key)
     except Exception as exc:  # noqa: BLE001
         log.debug("ollama unload failed: %s", exc)
 
@@ -607,6 +619,7 @@ def correct(
     budget_s: float = 900.0,
     cancel: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
+    api_key: str = "",
 ) -> tuple[list[Word], dict]:
     """Proofread `words` with the LLM at `url`. Returns (words, stats); never raises for
     LLM trouble, it just keeps the ASR words."""
@@ -627,6 +640,7 @@ def correct(
         "stopped": None,
         "context": context.source if context else "none",
         "reasons": {},
+        "backends": {},  # dozai X-Dozai-Backend -> requests it answered
     }
     reasons: Counter[str] = Counter()
     accepted: dict[int, str] = {}
@@ -647,7 +661,9 @@ def correct(
         stats["requests"] += 1
         unload_needed = not last
         try:
-            reply = _post(url, body, timeout_s)
+            reply, backend = _post(url, body, timeout_s, api_key)
+            if backend:
+                stats["backends"][backend] = stats["backends"].get(backend, 0) + 1
             edits = parse_edits((reply.get("message") or {}).get("content"))
         except Exception as exc:  # noqa: BLE001 - fail open on anything
             log.debug("window %d: ollama request failed: %s", wn, exc)
@@ -689,7 +705,7 @@ def correct(
                     taken.add(k)
                 reasons[v.reason.split(" (")[0]] += 1
     if unload_needed and stats["requests"]:
-        _unload(url, model)
+        _unload(url, model, api_key)
     stats["accepted"] = len(accepted)
     stats["rejected"] = sum(reasons.values())
     stats["reasons"] = dict(reasons)
@@ -716,6 +732,7 @@ def correct_video(
         timeout_s=settings.llm_timeout_s,
         budget_s=settings.llm_budget_s,
         cancel=cancel,
+        api_key=settings.ollama_api_key,
     )
     log.info(
         "llm correction for %s: %d flagged, %d windows, %d requests, %d accepted, "
@@ -731,4 +748,8 @@ def correct_video(
         stats["elapsed_s"],
         f", stopped: {stats['stopped']}" if stats["stopped"] else "",
     )
+    if stats["backends"]:
+        log.info(
+            "llm correction for %s answered by %s", getattr(video, "name", video), stats["backends"]
+        )
     return new, stats

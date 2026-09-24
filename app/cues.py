@@ -351,6 +351,7 @@ def _timed(ws: list[Word], groups: list[tuple[int, int]], rules: CueRules) -> li
     min_d = round(rules.min_duration * 1000)
     max_d = round(rules.max_duration * 1000)
     linger = round(rules.max_linger * 1000)
+    lead = round(rules.lead_in * 1000)
     starts = [round(ws[i].start * 1000) for i, _ in groups]
     spoken = [round(ws[j - 1].end * 1000) for _, j in groups]
 
@@ -361,6 +362,11 @@ def _timed(ws: list[Word], groups: list[tuple[int, int]], rules: CueRules) -> li
         s = starts[k]
         if prev_end is not None and s < prev_end + gap:
             s = prev_end + gap  # only with degenerate input (onsets closer than min_gap)
+        # Lead-in: a little before the first word, never into the previous
+        # cue's gap, never before 0. Doesn't move `starts` (speech onsets),
+        # which the reading-time and linger maths below still key off.
+        floor = prev_end + gap if prev_end is not None else 0
+        s = max(min(s, s - lead), floor, 0) if lead else s
         e_spoken = max(spoken[k], s)
         chars = len(text.replace("\n", ""))
         want = max(

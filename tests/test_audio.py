@@ -117,5 +117,39 @@ class ChunkBoundsTest(unittest.TestCase):
         self.assertTrue(sr * 215 <= b[1][1] <= sr * 216, b)
 
 
+class DecodeCheckTest(unittest.TestCase):
+    def test_stream_duration_from_field_or_mkv_tag(self):
+        self.assertEqual(audio._stream_duration({"duration": "7035.754667"}), 7035.754667)
+        self.assertAlmostEqual(
+            audio._stream_duration({"duration": "N/A", "tags": {"DURATION": "02:07:25.696000000"}}),
+            7645.696,
+        )
+        self.assertIsNone(audio._stream_duration({}))
+        self.assertEqual(pick_track({"streams": [stream()]}).duration, None)
+
+    def test_short_decode_is_retried(self):
+        import numpy as np
+
+        sr = audio.SAMPLE_RATE
+        short = np.zeros(sr * 9, dtype=np.float32)  # 1 s missing
+        full = np.zeros(sr * 10, dtype=np.float32)
+        with (
+            mock.patch.object(audio, "_run_ffmpeg", side_effect=[short, full]) as run,
+            self.assertLogs("app.audio", level="WARNING"),
+        ):
+            out = audio._decode_checked(Path("m.mkv"), ["ffmpeg"], expected=10.0)
+        self.assertIs(out, full)
+        self.assertEqual(run.call_count, 2)
+
+    def test_healthy_or_unknown_duration_decodes_once(self):
+        import numpy as np
+
+        full = np.zeros(audio.SAMPLE_RATE * 10, dtype=np.float32)
+        for expected in (10.0, 10.2, None):
+            with mock.patch.object(audio, "_run_ffmpeg", return_value=full) as run:
+                audio._decode_checked(Path("m.mkv"), ["ffmpeg"], expected=expected)
+            self.assertEqual(run.call_count, 1, expected)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -170,6 +170,84 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       - metric `subgen_memory_recycles_total`
       To do: confirm the RSS slope in prod via Mimir after deploy
 
+### Polish (2026-09-24)
+- [x] **Reading speed: already at human parity, no change.** Of our cues over 20 cps, 74% are
+      inherently fast (can't fit even using all the time up to the next line's speech), 22% could be
+      merged, and 4% have time left over. More telling, the human subs on the same films have *more*
+      fast cues: 9–21% vs our 6–13%, with the same median cps (13–15). Humans condense dialogue,
+      which verbatim subs can't. A lead-in (starting before speech) was rejected: it would trade real
+      onset accuracy for this metric
+- [x] **`min_linger` 0.7 → 1.0**: better on every film. Median |end error| went Lebowski 249→233,
+      Fargo 420→387, Snatch 239→175, Rock 345→313, Interstellar 238→157 ms, and the signed bias is now
+      around 0; onsets/QA/cps unchanged. Shipped in v4
+- [x] **Shot-change snapping** (`app/shots.py`, `SHOT_SNAP=true`). Cues move onto nearby cuts per the
+      Netflix Timed Text Style Guide: a start within 12 frames after / 4 before a cut moves to it; an
+      end within 12 frames of cut−2f goes to cut−2f. A snap is skipped if it would break
+      gap/duration/cps. Detection: ffmpeg `scdet` at threshold 5, with clustered candidates within
+      0.5 s dropped unless the top score is ≥ 2x the runner-up (motion and flashes). It runs in a
+      background thread next to the ASR, with NVDEC (`-hwaccel cuda`, `scale_cuda`) at ~100x realtime
+      and a CPU fallback (~700–1300 CPU-s per film), always `nice 19`. Cost ≈ +20% per job.
+      Eval (v3 base → snapped): ends better on 4/5 (Snatch 241→194 ms, ≤250 ms 52→59%), QA better
+      on 4/5, onsets ±7 ms. Onsets look slightly worse under `onset_local` only because it
+      subtracts the human lead-in; measured without offset on the films whose refs follow cuts
+      (Snatch, Interstellar), every figure improved.
+      **Prod needs `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video`** for NVDEC (libnvcuvid); without
+      it, decoding falls back to the CPU
+- [x] **Vocal isolation: rejected** (experiment, 2026-09-24). Mel-RoFormer (Kim) and htdemucs_ft
+      (vocals sub-model), fed to the aligner only or to whisper + aligner, on The Rock / Fargo /
+      Interstellar: nothing beat run-to-run noise (±16 ms onset, ±0.5 pp s+d). htdemucs_ft into whisper
+      was harmful (a whole 20 min Fargo chunk transcribed empty, s+d 36%). Cost: ~3–4.5 extra min per
+      2 h film on the 4070S. The premise doesn't hold either: Fargo's center channel is +30 dB speech
+      over background yet scores 271 ms, while Interstellar is +10 dB and scores 83 ms. The center
+      channel already does most of the work. Scripts and data: session scratchpad `vocals/`
+- [x] **Eval set quality**: `scripts/run_eval.py` now accepts `embedded:<stream>` refs. A text sub
+      stream inside the video is the *same release*, so there's no cut or framerate mismatch. It is
+      extracted into the eval output cache, never committed. 136 library films have a clean English
+      text stream. v3 on five of them (2026-09-24):
+
+      | Film | onset (local) | ≤250 ms | s+d | global offset | drift |
+      |---|---|---|---|---|---|
+      | John Wick | 65 ms | 86.6% | 10.8% | +189 ms | +5 ms |
+      | Die Hard | 70 ms | 91.8% | 9.2% | +103 ms | +43 ms |
+      | Hot Fuzz | 72 ms | 91.5% | 6.7% | +85 ms | −42 ms |
+      | Moon | 59 ms | 89.2% | 9.7% | +8 ms | −14 ms |
+      | Hereditary | 104 ms | 83.5% | 8.5% | +225 ms | −81 ms |
+
+      So The Rock (~360 ms) and Fargo (~280 ms) were mostly measuring their references. These five
+      join `eval/set.tsv` once the shot-snapping eval finishes (so that eval's set doesn't change
+      mid-run)
+- [x] **Lead-in**: with same-release refs the *global* offset is meaningful, and ours is +8 to
+      +225 ms (median ~+100): our cues appear later than the human ones. Pro subs typically set the
+      in-time a frame or two before speech, and CTC onsets tend to be slightly late. Test a small
+      `lead_in` (0.1–0.2 s, never into the previous cue's min_gap) against the raw (not local)
+      onset error on the embedded-ref films.
+      Prototyped as a post-process on the v3 outputs (raw median |onset error|, none → 0.10 → 0.15 s):
+      Hereditary 230→170→147, Hot Fuzz 96→75→79, John Wick 194→111→83, Die Hard 111→80→92,
+      Moon 57→94→128 ms. Moon's ref sits on speech. QA improved on all five.
+      **Decision: `lead_in = 0.1`** (≈2 frames, the pro "a frame or two early" convention; better
+      on 4/5, and costs Moon the least). Shipped in v4 (`cues._timed`, never into the previous cue's
+      gap)
+
+- [x] **v4 eval** (10 films, 2026-09-24; v3 → v4 = shots + linger 1.0 + lead-in 0.1):
+      - Raw onset improved where refs share our timeline: Snatch 286→215, Interstellar 230→166,
+        John Wick 194→115, Die Hard 111→92, Hot Fuzz 96→88 ms.
+      - Ends improved on 6/10. QA improved on all 10 (e.g. Lebowski 11.1→10.1, The Rock 12.7→11.3).
+      - Moon and Hereditary looked 100–180 ms worse in the first v4 run, but clean reruns matched v3
+        (Moon 72/73 ms, Hereditary 105 ms). That run was uniformly 0.34 s early on just those two
+        films, during heavy GPU contention, and took 720 s, which suggests audio lost in the decode.
+        Hence the decode guard below.
+- [x] **Decode-shortfall guard** (`audio._decode_checked`): a healthy decode matches the audio
+      stream's duration to the millisecond (stream `duration`, or the MKV `DURATION` tag; checked on 5
+      films). If the decode is > 0.25 s short, it is decoded again once, and logged as an error if still
+      short. ffmpeg can drop unreadable packets (NFS) and still exit 0, and lost audio at the start
+      shifts every cue early.
+- [x] **LLM calls via dozai** (spec: `dozai/docs/integrations/whisper-sub-gen.md`): `OLLAMA_API_KEY`
+      is sent as a Bearer token. `OLLAMA_URL=http://dozai.dozai.svc.cluster.local:8080/ollama/auto`
+      picks the 5090 when up, else the 4070, records usage as client `whisper-sub-gen`, and owns model
+      loading (our `keep_alive: 0` unload no longer evicts chat users). The `X-Dozai-Backend`
+      header is recorded per film (`corrected.backends`). No key = direct Ollama, unchanged.
+      `LLM_CORRECT` stays false (Phase 3 decision).
+
 ### Phase 3: Word validation (local LLM)
 - [x] Pick the serving option and model: Ollama v0.34.x as `homelab/apps/ollama`, `qwen3.5:4b`
       Q4_K_M (A/B `qwen3.5:9b` / Gemma-4-E4B if the eval shows headroom). Env

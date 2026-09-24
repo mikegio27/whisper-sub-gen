@@ -27,6 +27,7 @@ from .punctuation import PROMPT as PUNCT_PROMPT
 from .punctuation import repair as repair_punctuation
 from .qa import score as qa_score
 from .scanner import ffprobe, output_path
+from .shots import ShotJob, probe_fps
 from .srt import render_srt
 
 # Bump whenever output quality changes materially. Stored per file, so
@@ -35,7 +36,8 @@ from .srt import render_srt
 #   1: center-channel audio, word timestamps, composed cues (docs/ROADMAP.md P1)
 #   2: word times from CTC forced alignment (MMS aligner, app/align.py, ROADMAP P2)
 #   3: + re-decode of whisper's no-punctuation stretches (app/punctuation.py)
-PIPELINE_VERSION = 3
+#   4: + shot-change snapping (app/shots.py), min_linger 1.0, lead_in 0.1
+PIPELINE_VERSION = 4
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +194,21 @@ class Transcriber:
             self.progress.started_at = started
             self.progress.language = ""
 
+        # Shot-change detection (ffmpeg) runs next to the ASR; snap() joins it
+        # after compose and fails open.
+        shots = (
+            ShotJob(
+                video,
+                probe,
+                decode=settings.shot_decode,
+                whisper_device=settings.whisper_device,
+                threshold=settings.shot_threshold,
+                threads=settings.shot_threads or settings.cpu_threads,
+                timeout=settings.shot_timeout_s,
+            )
+            if settings.shot_snap
+            else None
+        )
         try:
             audio = load_audio(
                 video,
@@ -245,6 +262,9 @@ class Transcriber:
             cues = compose(words)
             if not cues:
                 raise RuntimeError("no speech detected — nothing to write")
+            shot_stats: dict = {"enabled": False}
+            if shots is not None:
+                cues, shot_stats = shots.snap(cues, fps=probe_fps(probe))
             quality = qa_score(cues)
 
             target = output_path(video, lang)
@@ -285,8 +305,11 @@ class Transcriber:
                 "punct_repair": punct,
                 "aligned": aligned,
                 "corrected": corrected,
+                "shots": shot_stats,
             }
         finally:
+            if shots is not None:
+                shots.close()  # kills ffmpeg if the job failed or was cancelled
             with self.progress._lock:
                 self.progress.path = ""
                 self.progress.started_at = 0.0

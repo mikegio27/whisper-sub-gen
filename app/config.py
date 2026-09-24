@@ -89,6 +89,23 @@ class Settings(BaseSettings):
     # Unload the aligner after each job: the stages share a 12 GB card.
     align_free_after_job: bool = True
 
+    # --- Shot-change snapping (app/shots.py) ---
+    # Snap cue in/out times to nearby cuts (Netflix timing guide). ffmpeg scdet
+    # runs in a background thread alongside the ASR; any failure keeps the
+    # composed timings. Eval 2026-09-23 (5 films): median end error -2..-47 ms
+    # on 4/5, QA/100 lower on 4/5; onsets within +-7 ms. ~+20% job time on a 5090.
+    shot_snap: bool = True
+    # auto = NVDEC (-hwaccel cuda + scale_cuda) when WHISPER_DEVICE=cuda, else CPU; NVDEC
+    # errors fall back to CPU. On k8s NVDEC needs NVIDIA_DRIVER_CAPABILITIES to
+    # include "video". cpu | cuda force one.
+    shot_decode: str = "auto"
+    # scdet score floor. Dark-scene cuts score 5-7; motion clusters are
+    # filtered separately (shots.filter_cuts).
+    shot_threshold: float = 5.0
+    # ffmpeg decode threads for the CPU path; 0 = CPU_THREADS, else ffmpeg's default.
+    shot_threads: int = 0
+    shot_timeout_s: float = 1800.0
+
     # --- Output ---
     # Filename becomes "<video stem><subtitle_tag>.<lang>.srt"
     subtitle_tag: str = ""
@@ -105,6 +122,11 @@ class Settings(BaseSettings):
     # Off until the eval shows it helps.
     llm_correct: bool = False
     ollama_url: str = ""  # e.g. http://ollama.ollama.svc.cluster.local:11434
+    # dozai client token (Bearer). With it, OLLAMA_URL points at dozai
+    # (http://dozai.dozai.svc.cluster.local:8080/ollama/auto), which picks the GPU,
+    # records usage and owns model loading. Empty = talk to Ollama directly. A
+    # secret: from the whisper-dozai SealedSecret, never the ConfigMap.
+    ollama_api_key: str = ""
     ollama_model: str = "qwen3.5:4b"
     # Words whisper is less sure of than this get a second look. 0.6 flagged
     # ~9-12% of words on the OotP clip (2026-09-22), incl. "Austin?" 0.22

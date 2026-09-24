@@ -26,6 +26,10 @@ EXTRACT_TIMEOUT_S = 1800
 # slot, not dialogue. Fall back to a plain downmix.
 SILENT_CENTER_DBFS = -55.0
 
+# A healthy decode matches the audio stream's duration to the millisecond
+# (Hereditary: 7645.696 s both); more missing than this means lost packets.
+MAX_DECODE_SHORTFALL_S = 0.25
+
 # Named ffmpeg layouts with 3+ channels but no front-center speaker. pan=FC
 # on these yields silence (the fallback would catch it, after a wasted decode).
 _NO_FC = frozenset({"quad", "quad(side)", "2.2", "3.0(back)", "6.0(front)", "6.1(front)"})
@@ -40,6 +44,7 @@ class AudioTrack:
     layout: str
     language: str
     title: str
+    duration: float | None = None  # seconds, from the stream (mp4) or its DURATION tag (mkv)
 
     @property
     def has_center(self) -> bool:
@@ -71,6 +76,7 @@ def pick_track(probe: dict, language: str = "") -> AudioTrack | None:
                     layout=str(s.get("channel_layout", "")),
                     language=str(tags.get("language", "")),
                     title=title,
+                    duration=_stream_duration(s),
                 ),
                 bool(disp.get("comment") or disp.get("visual_impaired"))
                 or any(h in title.lower() for h in _COMMENTARY_HINTS),
@@ -137,11 +143,53 @@ def rms_dbfs(samples) -> float:
     return 20 * np.log10(rms) if rms > 0 else float("-inf")
 
 
+def _stream_duration(stream: dict) -> float | None:
+    raw = stream.get("duration")
+    try:
+        if raw not in (None, "N/A"):
+            return float(raw)
+    except (TypeError, ValueError):
+        pass
+    tag = ((stream.get("tags") or {}).get("DURATION") or "").strip()  # "02:07:25.696000000"
+    try:
+        h, m, sec = tag.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+    except ValueError:
+        return None
+
+
+def _decode_checked(video: Path, cmd: list[str], expected: float | None):
+    """Decode, and retry once if the result is short of the stream's duration.
+
+    ffmpeg can drop unreadable packets (an NFS hiccup) and still exit 0. Lost
+    audio at the start shifts every subtitle early: one eval run came out
+    uniformly 0.34 s early on two films during heavy contention (2026-09-24),
+    and was fine on rerun. A healthy decode matches the stream duration to the
+    millisecond, so a shortfall is a reliable signal."""
+    samples = _run_ffmpeg(cmd)
+    if not expected:
+        return samples
+    short = expected - len(samples) / SAMPLE_RATE
+    if short <= MAX_DECODE_SHORTFALL_S:
+        return samples
+    log.warning("decode of %s is %.2fs short of the stream; retrying", video.name, short)
+    samples = _run_ffmpeg(cmd)
+    short = expected - len(samples) / SAMPLE_RATE
+    if short > MAX_DECODE_SHORTFALL_S:
+        log.error(
+            "decode of %s still %.2fs short of the stream; timings may be shifted",
+            video.name,
+            short,
+        )
+    return samples
+
+
 def load_audio(video: Path, probe: dict, *, language: str = "", center_only: bool = True):
     """Decode the dialogue track of `video` to a float32 numpy array at 16 kHz."""
     track = pick_track(probe, language)
     use_center = center_only and track is not None and track.has_center
-    samples = _run_ffmpeg(ffmpeg_cmd(video, track, use_center))
+    expected = track.duration if track else None
+    samples = _decode_checked(video, ffmpeg_cmd(video, track, use_center), expected)
     if use_center:
         level = rms_dbfs(samples)
         if level < SILENT_CENTER_DBFS:
@@ -150,7 +198,7 @@ def load_audio(video: Path, probe: dict, *, language: str = "", center_only: boo
                 video.name,
                 level,
             )
-            samples = _run_ffmpeg(ffmpeg_cmd(video, track, center_only=False))
+            samples = _decode_checked(video, ffmpeg_cmd(video, track, center_only=False), expected)
             use_center = False
     log.info(
         "decoded %s: track %s (%s, %s ch, %s) %s, %.0fs",

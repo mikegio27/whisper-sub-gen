@@ -67,6 +67,11 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `ALIGN_MIN_SCORE` | `-5.0` | Mean per-token log-prob below which a segment keeps whisper's timings (~0.5% of segments) |
 | `ALIGN_BATCH_SECONDS` | `120` | Padded audio per aligner forward pass; bounds its VRAM |
 | `ALIGN_FREE_AFTER_JOB` | `true` | Unload the aligner after each file (the stages share one GPU) |
+| `SHOT_SNAP` | `true` | Snap cue in/out times to nearby shot changes (Netflix timing guide; `app/shots.py`). ffmpeg `scdet` runs in a background thread during the ASR; any failure keeps the composed timings |
+| `SHOT_DECODE` | `auto` | `auto` = NVDEC (`-hwaccel cuda` + `scale_cuda`, downscaled on the GPU) when `WHISPER_DEVICE=cuda`, else CPU; NVDEC errors fall back to CPU. `cpu` / `cuda` force one. In k8s, NVDEC needs `NVIDIA_DRIVER_CAPABILITIES` to include `video` |
+| `SHOT_THRESHOLD` | `5.0` | `scdet` score floor for a cut candidate (dark-scene cuts score 5-7); motion/flash clusters are filtered separately |
+| `SHOT_THREADS` | `0` | ffmpeg decode threads on the CPU path; `0` = `CPU_THREADS`, else ffmpeg's default |
+| `SHOT_TIMEOUT_S` | `1800` | Give up on shot detection after this long (the subtitle is still written, unsnapped) |
 | `SUBTITLE_TAG` | *(empty)* | Extra tag in output name: `<stem><tag>.<lang>.srt` |
 | `OVERWRITE_EXISTING_OUTPUT` | `false` | Don't treat an existing `<stem><tag>.<lang>.srt` as done. Our own output is also an external sub, so pair with `SKIP_IF_EXTERNAL_SUBS=false` to actually regenerate |
 | `REGENERATE_OUTDATED` | `false` | Redo subs this service wrote with an older pipeline version, only if the file is still exactly what we wrote and no other sub sits next to it |
@@ -87,6 +92,7 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `SHUTDOWN_MODE` | `abort` | On SIGTERM: `abort` cancels the active job and deletes its partial output (retried after restart); `finish` completes the active file first — size the pod's `terminationGracePeriodSeconds` to cover a full movie |
 | `LLM_CORRECT` | `false` | Local-LLM word correction (ROADMAP P3): Ollama proposes fixes for flagged words, code accepts only sound-alike edits or exact character names. Fails open. Needs `OLLAMA_URL` |
 | `OLLAMA_URL` | *(empty)* | Ollama base URL, e.g. `http://ollama.ollama.svc.cluster.local:11434` |
+| `OLLAMA_API_KEY` | *(empty)* | dozai client token, sent as `Authorization: Bearer`. Set it together with `OLLAMA_URL=http://dozai.dozai.svc.cluster.local:8080/ollama/auto` to route through dozai (GPU routing, usage tracking, dozai owns model loading). From a SealedSecret, never the ConfigMap. Empty = direct Ollama |
 | `OLLAMA_MODEL` | `qwen3.5:4b` | Model tag; unloaded (`keep_alive: 0`) after each film |
 | `LLM_FLAG_PROB` | `0.6` | Words whisper scores below this get a second look (~10% of words); capitalised unknown names and 3x repeats are flagged regardless |
 | `LLM_TIMEOUT_S` | `120` | Per request (the first one loads the model) |
