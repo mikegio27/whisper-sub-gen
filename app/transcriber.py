@@ -23,6 +23,8 @@ from .config import settings
 from .correct import correct_video
 from .cues import Word, compose
 from .hallucination import filter_segments
+from .punctuation import PROMPT as PUNCT_PROMPT
+from .punctuation import repair as repair_punctuation
 from .qa import score as qa_score
 from .scanner import ffprobe, output_path
 from .srt import render_srt
@@ -32,7 +34,8 @@ from .srt import render_srt
 #   0: raw whisper segments (<= sha-2fae320)
 #   1: center-channel audio, word timestamps, composed cues (docs/ROADMAP.md P1)
 #   2: word times from CTC forced alignment (MMS aligner, app/align.py, ROADMAP P2)
-PIPELINE_VERSION = 2
+#   3: + re-decode of whisper's no-punctuation stretches (app/punctuation.py)
+PIPELINE_VERSION = 3
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +221,11 @@ class Transcriber:
                     video.name,
                     "; ".join(hallucinated[:8]),
                 )
+            punct: dict = {"enabled": False}
+            if settings.punct_repair:
+                asr_segments, punct = self._repair_punctuation(
+                    video, model, audio, asr_segments, lang
+                )
             words = [w for seg in asr_segments for w in seg.words]
             aligned: dict = {"enabled": False}
             if settings.align_words:
@@ -274,6 +282,7 @@ class Transcriber:
                 "pipeline": _effective_pipeline(aligned),
                 "qa": quality,
                 "hallucinations_dropped": len(hallucinated),
+                "punct_repair": punct,
                 "aligned": aligned,
                 "corrected": corrected,
             }
@@ -328,12 +337,10 @@ class Transcriber:
         )
         return res.words, {"enabled": True, **stats}
 
-    def _asr(self, model, audio, bounds: list[tuple[int, int]]):
-        """Run faster-whisper chunk by chunk (see audio.chunk_bounds), yielding
-        segments with film-relative times. The first chunk detects the language;
-        later chunks reuse it so a quiet or foreign-dialogue stretch can't flip
-        it mid-film. Returns (segment generator, first chunk's info)."""
-        kwargs = {
+    @staticmethod
+    def _asr_kwargs() -> dict:
+        """faster-whisper decode options shared by the main pass and repairs."""
+        return {
             "task": settings.task,
             "beam_size": settings.beam_size,
             "condition_on_previous_text": settings.condition_on_previous_text,
@@ -346,6 +353,48 @@ class Transcriber:
                 "speech_pad_ms": settings.vad_speech_pad_ms,
             },
         }
+
+    def _repair_punctuation(self, video: Path, model, audio, segments, lang: str):
+        """Re-decode whisper's no-punctuation stretches (app/punctuation.py). Never
+        fails the job: on any error the original segments are kept."""
+        kwargs = {**self._asr_kwargs(), "initial_prompt": PUNCT_PROMPT}
+
+        def decode(a: float, b: float) -> list[Word]:
+            if self.cancel.is_set():
+                raise TranscriptionCancelled(str(video))
+            lo, hi = int(a * SAMPLE_RATE), int(b * SAMPLE_RATE)
+            segs, _ = model.transcribe(audio[lo:hi], language=lang, **kwargs)
+            return [
+                Word(w.start + a, w.end + a, w.word, w.probability)
+                for seg in segs
+                for w in seg.words or ()
+            ]
+
+        try:
+            segments, stats = repair_punctuation(
+                segments, decode, lambda s, e, w: AlignSegment(s, e, w)
+            )
+        except TranscriptionCancelled:
+            raise
+        except Exception:
+            log.exception("punctuation repair failed for %s; keeping whisper text", video.name)
+            return segments, {"enabled": True, "error": True}
+        if stats.candidates:
+            log.info(
+                "punctuation repair %s: %d/%d stretches re-decoded (%s)",
+                video.name,
+                stats.repaired,
+                stats.candidates,
+                stats.reasons or "-",
+            )
+        return segments, {"enabled": True, **stats.as_dict()}
+
+    def _asr(self, model, audio, bounds: list[tuple[int, int]]):
+        """Run faster-whisper chunk by chunk (see audio.chunk_bounds), yielding
+        segments with film-relative times. The first chunk detects the language;
+        later chunks reuse it so a quiet or foreign-dialogue stretch can't flip
+        it mid-film. Returns (segment generator, first chunk's info)."""
+        kwargs = self._asr_kwargs()
         s0, e0 = bounds[0]
         first, info = model.transcribe(audio[s0:e0], language=settings.language or None, **kwargs)
         language = settings.language or info.language

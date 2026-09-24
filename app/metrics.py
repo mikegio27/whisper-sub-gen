@@ -29,3 +29,7 @@ QA_VIOLATIONS = Histogram(
     "Subtitle-standard violations per 100 cues in each written file (qa.score)",
     buckets=(1, 2, 5, 10, 20, 40, 80, 160),
 )
+RECYCLES = Counter(
+    "subgen_memory_recycles_total",
+    "Clean restarts between jobs because RSS passed RECYCLE_MEMORY_FRACTION of the limit",
+)

@@ -58,6 +58,7 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `VAD_MIN_SILENCE_MS` | `500` | Silence that splits speech chunks (faster-whisper's default 2000 glues speech across music) |
 | `VAD_SPEECH_PAD_MS` | `200` | Padding around each speech chunk |
 | `ASR_CHUNK_S` | `1200` | Transcribe in ~N-second chunks cut at quiet points, which bounds RAM (whole-film feature extraction takes ~3.3 GB/hour); 0 = one pass |
+| `PUNCT_REPAIR` | `true` | Re-decode stretches whisper wrote without punctuation/capitals, using a punctuated prompt; kept only if the words match |
 | `CONDITION_ON_PREVIOUS_TEXT` | `false` | Feed the previous window's text to the next; `true` lets one hallucination repeat |
 | `HALLUCINATION_SILENCE_THRESHOLD` | `2.0` | Skip silences longer than this (s) around suspected hallucinations; 0 disables |
 | `AUDIO_CENTER_CHANNEL` | `true` | Use only the center (dialogue) channel of 5.1/7.1 tracks; falls back to a downmix when it's silent |
@@ -82,6 +83,7 @@ under music and garbles word timestamps. Use the GPU for speed instead.
 | `WEBHOOK_URL` | *(empty)* | POSTed a JSON summary after every processed file |
 | `LOG_LEVEL` | `INFO` | |
 | `PROGRESS_LOG_SECONDS` | `60` | Log transcription progress (%, speed, ETA) every N seconds; 0 disables |
+| `RECYCLE_MEMORY_FRACTION` | `0.7` | After a job, restart cleanly if RSS exceeds this fraction of the container memory limit (0 disables). Guards against heap growth over hundreds of jobs |
 | `SHUTDOWN_MODE` | `abort` | On SIGTERM: `abort` cancels the active job and deletes its partial output (retried after restart); `finish` completes the active file first — size the pod's `terminationGracePeriodSeconds` to cover a full movie |
 | `LLM_CORRECT` | `false` | Local-LLM word correction (ROADMAP P3): Ollama proposes fixes for flagged words, code accepts only sound-alike edits or exact character names. Fails open. Needs `OLLAMA_URL` |
 | `OLLAMA_URL` | *(empty)* | Ollama base URL, e.g. `http://ollama.ollama.svc.cluster.local:11434` |

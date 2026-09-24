@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Feeding each window the previous text makes one hallucination repeat for
     # minutes (the "Is she dead?" x3 loops). Off costs little on films.
     condition_on_previous_text: bool = False
+    # Re-decode stretches whisper wrote as run-on lowercase with no punctuation,
+    # with a punctuated prompt (app/punctuation.py). Kept only when the words
+    # match and are now punctuated.
+    punct_repair: bool = True
     # Transcribe in chunks of about this many seconds, cut at quiet points.
     # faster-whisper's feature extraction holds ~3.3 GB per hour of input in
     # RAM; 1200 s keeps that near 1.1 GB whatever the film's length. 0 = one
@@ -141,6 +145,10 @@ class Settings(BaseSettings):
     # file first — make sure the pod's terminationGracePeriodSeconds is
     # large enough to transcribe one full movie.
     shutdown_mode: str = "abort"
+    # After each job, restart cleanly (SIGTERM to ourselves; the pod restarts)
+    # if RSS is above this fraction of the container memory limit. Between
+    # jobs nothing is lost; mid-job OOMKills lose the film. 0 disables.
+    recycle_memory_fraction: float = 0.7
 
     @field_validator("shutdown_mode")
     @classmethod

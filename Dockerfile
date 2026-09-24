@@ -35,6 +35,11 @@ RUN useradd --uid 1000 --create-home subgen \
     && chown -R subgen:subgen /data /models /srv
 USER subgen
 
+# Two glibc malloc arenas instead of 8 per core: large short-lived numpy/torch
+# buffers on the worker thread fragmented the heap until RSS hit the 12Gi
+# limit after a few hundred jobs (see app/memory.py).
+ENV MALLOC_ARENA_MAX=2
+
 ENV STATE_DIR=/data \
     MODEL_DIR=/models \
     MEDIA_DIRS=/media \

@@ -35,7 +35,7 @@ video, out = Path(sys.argv[2]), Path(sys.argv[3])
 import app.transcriber as t
 t.output_path = lambda v, lang: out
 r = t.Transcriber().transcribe(video)
-keep = ("elapsed_s", "language", "aligned", "corrected", "hallucinations_dropped")
+keep = ("elapsed_s", "language", "aligned", "corrected", "hallucinations_dropped", "punct_repair")
 print(json.dumps({k: r[k] for k in keep if k in r}, default=str))
 """
 

@@ -151,11 +151,24 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       Hotfix: limit 24Gi. Fix: `ASR_CHUNK_S=1200`, ~20 min chunks cut at the quietest 0.5 s near
       each mark, language fixed from the first chunk. Godfather II peak RSS is now 4.3 GB, 78x
       realtime, with clean cuts (checked cues at every boundary)
-- [ ] **Whisper's no-punctuation mode**: stretches come out all lowercase with no punctuation
-      ("i'm gonna leave here tonight"). 0.5–2.5% of cues per film, in v1 and v2 alike (lowercase "i"
-      as a marker: The Rock 43/1792, Lebowski 26/1938). Candidates: detect the run and re-decode that
-      window with a punctuated `initial_prompt`; a truecasing pass; or an LLM punctuation-restore
-      mode (words unchanged, which suits the existing acceptance checks better than word edits)
+- [x] **Whisper's no-punctuation mode** (`app/punctuation.py`, `PUNCT_REPAIR`): stretches came out
+      all lowercase with no punctuation ("i'm gonna leave here tonight"), 0.5–2.5% of cues per film.
+      Detected segments (≥ 4 words, no capitals or punctuation, adjacent ones merged up to 28 s) are
+      re-decoded with a punctuated `initial_prompt`. The result is kept only if it has the same words
+      (≥ 0.8 similarity) and is now punctuated. Edge words borrowed from neighbours are trimmed.
+      Eval: lowercase-"i" cues went from 8–43 per film to 0–1, with onset and s+d unchanged. Cost +6%
+      runtime (The Rock: 33/34 stretches repaired, 1 rejected as different words). **Pipeline v3**:
+      regen redoes the v2 files too
+- [x] **RSS growth across jobs** (2026-09-24): prod climbed ~3.5 → 11 GB over ~180 sequential jobs
+      and was OOMKilled mid-job (3 restarts in 12 h). It wasn't reproducible locally (9 varied films
+      on a worker thread: ~3.2 GB, or ~2.2 GB with `malloc_trim`), which points at glibc heap
+      fragmentation on the image's glibc. Fixed in layers (`app/memory.py`):
+      - `gc` + `malloc_trim(0)` after every job
+      - `MALLOC_ARENA_MAX=2` in the image
+      - `RECYCLE_MEMORY_FRACTION=0.7`: when RSS ends a job above 70% of the limit, a clean SIGTERM
+        restart happens between jobs
+      - metric `subgen_memory_recycles_total`
+      To do: confirm the RSS slope in prod via Mimir after deploy
 
 ### Phase 3: Word validation (local LLM)
 - [x] Pick the serving option and model: Ollama v0.34.x as `homelab/apps/ollama`, `qwen3.5:4b`

@@ -5,7 +5,9 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import os
 import queue
+import signal
 import threading
 import time
 import urllib.request
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from . import metrics
+from . import memory, metrics
 from .config import in_work_window, settings
 from .scanner import check_needs_subtitles, external_subtitles, find_videos
 from .state import StateStore
@@ -245,6 +247,24 @@ class Worker:
             finally:
                 with self._lock:
                     self._current = None
+                self._after_job()
+
+    def _after_job(self) -> None:
+        """Memory hygiene between jobs (see app/memory.py). If RSS still sits
+        above RECYCLE_MEMORY_FRACTION of the container limit, shut down cleanly
+        now, between jobs, and let Kubernetes restart the pod, rather than get
+        OOMKilled halfway through the next film."""
+        memory.release()
+        over, rss, limit = memory.over_budget(settings.recycle_memory_fraction)
+        if over and not self._stop.is_set():
+            log.warning(
+                "RSS %.1f GiB > %.0f%% of the %.1f GiB limit after a job; restarting cleanly",
+                rss / 2**30,
+                100 * settings.recycle_memory_fraction,
+                limit / 2**30,
+            )
+            metrics.RECYCLES.inc()
+            os.kill(os.getpid(), signal.SIGTERM)
 
     def _wait_for_window(self, job: Job) -> None:
         if job.bypass_window and settings.manual_bypass_window:

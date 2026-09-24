@@ -269,5 +269,40 @@ class EffectivePipelineTest(unittest.TestCase):
         )
 
 
+class RecycleTest(unittest.TestCase):
+    """Over the memory budget after a job: SIGTERM ourselves, between jobs."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(settings, "state_dir", tmp.name):
+            self.worker = Worker()
+        self.addCleanup(self.worker.store._conn.close)
+
+    def test_signals_only_when_over_budget(self):
+        with (
+            mock.patch("app.worker.memory.over_budget", return_value=(True, 9 * 2**30, 12 * 2**30)),
+            mock.patch("app.worker.os.kill") as kill,
+            self.assertLogs("app.worker", level="WARNING"),
+        ):
+            self.worker._after_job()
+        kill.assert_called_once()
+        with (
+            mock.patch("app.worker.memory.over_budget", return_value=(False, 1, 12 * 2**30)),
+            mock.patch("app.worker.os.kill") as kill,
+        ):
+            self.worker._after_job()
+        kill.assert_not_called()
+
+    def test_no_signal_while_already_stopping(self):
+        self.worker._stop.set()
+        with (
+            mock.patch("app.worker.memory.over_budget", return_value=(True, 9, 10)),
+            mock.patch("app.worker.os.kill") as kill,
+        ):
+            self.worker._after_job()
+        kill.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
