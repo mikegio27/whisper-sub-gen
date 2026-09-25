@@ -75,10 +75,10 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       removing the global (release) offset, % within 100/250/500 ms, drift, `wer_approx`.
       Caveats: onset n covers only cues both subs start on the same word (read n with the %),
       and human subs paraphrase, so WER vs a human ref has a floor well above 0
-- [ ] Eval set: The Big Lebowski, Fargo, Snatch, The Rock, Interstellar (human sidecars;
+- [x] Eval set: The Big Lebowski, Fargo, Snatch, The Rock, Interstellar (human sidecars;
       talky / accents / fast speech / action / score-heavy). Run locally on the RTX 5090 against
       a read-only NFS mount of the library (this host is in the export's allow list)
-- [ ] Baseline numbers for the old pipeline recorded below
+- [x] Baseline numbers for the old pipeline recorded below
 
 ### Phase 1: Cheap wins (no new model)
 - [x] `audio.py`: dialogue-track pick (skips commentary), center channel for 5.1/7.1 with a
@@ -102,7 +102,7 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       (1 s of silence end to end, since cuBLAS loads lazily) at startup. A failure sets
       `/healthz` to 503, so the pod restarts, and jobs are dropped without a state row, so a
       driver mismatch can't mark the whole library `failed`
-- [ ] Ship, in order:
+- [x] Ship, in order:
       1. commit whisper-sub-gen (owner) → CI builds `sha-<X>` + `sha-<X>-cuda`
       2. homelab: the prepared GPU switch, with the image set to `sha-<X>-cuda` (not the
          `sha-2fae320-cuda` placeholder in the working tree) → push → watch for
@@ -112,12 +112,12 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
 
 ### Phase 2: Forced alignment (GPU)
 - [x] Choose the aligner: ctc-forced-aligner @ `64293cc` + MMS-300m-1130 (see decisions)
-- [ ] **Driver check.** The k3s host runs NVIDIA **550.163.01 (CUDA 12.4)**. CTranslate2 >= 4.6.3
+- [x] **Driver check.** (verified 2026-09-23: CTranslate2 12.8 and torch cu129 both run on 550) The k3s host runs NVIDIA **550.163.01 (CUDA 12.4)**. CTranslate2 >= 4.6.3
       wheels are CUDA 12.8 builds, and the recommended torch is `2.13.0+cu129`. Both should run on
       550 via CUDA minor-version compatibility (sm_89 SASS, no PTX JIT), but that's unverified.
       Canary: the P1 CUDA image in prod first. Fallbacks: upgrade the host driver to >= 575, or a
       cu124/cu126 torch build
-- [ ] Prod on the CUDA image + GPU slice (homelab change), `WHISPER_COMPUTE_TYPE=int8_float16`
+- [x] Prod on the CUDA image + GPU slice (homelab change), `WHISPER_COMPUTE_TYPE=int8_float16`
       (less VRAM on the shared card)
 - [x] `align.py`: per-segment windows (±0.5 s, ≤0.25 s into a neighbour), num2words for digits,
       uroman for non-Latin scripts, per-segment fallback, `free()` after each job
@@ -139,10 +139,9 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
 - [x] Image: torch 2.13.0 from the PyTorch index (cu129 / cpu) **before** requirements.txt, plus
       `transformers~=5.17`, `uroman`, `num2words` in requirements. No builder stage. CI frees
       runner disk for the CUDA leg
-- [ ] Dev box note: RTX 5090 (sm_120) — use `int8_float16` (reports of fp16 instability on
+- [x] Dev box note: RTX 5090 (sm_120) — use `int8_float16` (reports of fp16 instability on
       Blackwell), torch cu128/cu129 wheels
-- [ ] Optional: vocal separation for action/music-heavy films. Shot-change snapping (ffmpeg `scdet`)
-- [ ] Optional: vocal separation for action/music-heavy films. Shot-change snapping (ffmpeg `scdet`)
+- [x] Vocal separation (rejected, see Polish) and shot-change snapping (shipped in v4)
 
 ### Ops findings after v2 went live (2026-09-23)
 - [x] **OOMKilled on long films.** With VAD off, faster-whisper builds the mel spectrogram for the
@@ -252,11 +251,27 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       `video`; shot detection runs on NVDEC in prod (The Net: 1327 cuts, 92 starts / 234 ends
       snapped). dozai path verified from the pod: 200 with the token, 401 without; `dozai client
       list` shows `whisper-sub-gen` LAST USED.
-- [ ] **Shot detection cost on the 4070S**: 178 s for a 1 h 54 min film (5090: ~60 s), so the job
+- [x] **Shot detection cost on the 4070S** (watch only): 178 s for a 1 h 54 min film (5090: ~60 s), so the job
       waited 79 s for it: 103 → 178 s per film (+73%, not the +20% seen on the 5090). Tolerable for
       the one-off regen backlog. Watch whether it competes with Jellyfin transcodes for NVDEC. If
       it does, options: skip snapping when detection isn't done by compose time, run detection
-      only for new files, or `SHOT_DECODE=cpu` at nice 19
+      only for new files, or `SHOT_DECODE=cpu` at nice 19.
+      Follow-up: on typical content, detection keeps pace. DS9 episodes waited 0.5–5.7 s,
+      ~60x realtime overall. Only long 1080p films wait noticeably
+
+### Next (open, 2026-09-24)
+- [ ] Confirm the v4 regeneration backlog (~1,840 files) finishes with flat memory
+      (`subgen_memory_recycles_total` stays ~0) and doesn't disturb Jellyfin transcodes
+- [ ] 162 files never subtitled: `Permission denied` writing into American Dad! / Futurama
+      folders on TrueNAS (uid 1000). Owner-side permission fix, then they get picked up by the next scan
+- [ ] Owner decision: foreign-language films, `transcribe` (original language, today) or
+      `translate` (English). Mixed-language films are also imperfect, because the language is fixed
+      from the first chunk
+- [ ] Faster pickup: a Jellyfin "item added" webhook calling `/process`, plus a Jellyfin library
+      refresh after each write (today it's the 6 h scan + Jellyfin's own scan)
+- [ ] `API_KEY` for the service API (SealedSecret). Only matters if something outside the
+      cluster ever calls it
+- [ ] *(nice-to-have)* Speaker-change dashes need diarization; cosmetic, sizeable
 
 ### Phase 3: Word validation (local LLM)
 - [x] Pick the serving option and model: Ollama v0.34.x as `homelab/apps/ollama`, `qwen3.5:4b`
@@ -264,7 +279,7 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
       `OLLAMA_MAX_LOADED_MODELS=1 NUM_PARALLEL=1 CONTEXT_LENGTH=8192 FLASH_ATTENTION=1
       KV_CACHE_TYPE=q8_0`; requests `think:false temperature:0`, JSON schema in `format`.
       Needs the nvidia-device-plugin time-slicing raised from 4 to 6 (accounting only)
-- [ ] Estimated cost: ~1.5–2.5 min per 2 h film on a 4070S when only flagged windows are sent
+- [x] ~~Estimated cost: ~1.5–2.5 min per 2 h film~~ moot, LLM correction is off on a 4070S when only flagged windows are sent
 - [x] Ollama deployed in-cluster (`homelab/apps/ollama`, qwen3.5:4b pulled on start), time-slicing
       4 → 6 (2026-09-23)
 - [x] Flag low-confidence words: prob < 0.6 (≈10% of words on the OotP clip), plus mid-sentence
@@ -276,7 +291,7 @@ metric part). Keep them that way so the tests stay fast and GPU-free.
 - [x] Decided on the eval set: **off**. v2 + qwen3.5:27b (5090) gave s+d 10.5 / 11.7 / 11.1% vs
       10.8 / 11.4 / 11.2% without it (Lebowski / Fargo / Snatch), within run-to-run noise, at 3–4x
       the runtime. The code stays (`LLM_CORRECT`) for a better model or a names-heavy use case
-- [ ] Optional: second ASR for disagreement flags: parakeet-tdt-0.6b-v3 via `onnx-asr` on **CPU**
+- [ ] *(deferred, low value)* Optional: second ASR for disagreement flags: parakeet-tdt-0.6b-v3 via `onnx-asr` on **CPU**
       (onnxruntime is already a faster-whisper dep; no NeMo, no VRAM; ~4 min per film). Text only,
       its timings are worse than the aligner's
 - Seen on the OotP clip, P3 targets: "Patrona" (Patronum), "Dumbledore, Austin?" (asked you),

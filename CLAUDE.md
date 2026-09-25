@@ -82,6 +82,9 @@ app/hallucination.py PURE drop of non-speech fakes (isolated "Thank you.", SDH c
 app/correct.py      local-LLM (Ollama) proofreading of flagged words; code-side acceptance test; off by default
 app/context.py      title/year/cast from the path (+ Jellyfin API when JELLYFIN_URL/API_KEY set)
 scripts/run_eval.py eval-set runner (eval/set.tsv, human refs on the Jellyfin share); not in the image
+app/punctuation.py  re-decode whisper's no-punctuation stretches with a punctuated prompt (fail open)
+app/shots.py        ffmpeg scdet (NVDEC, CPU fallback) in a background thread; PURE snap() of cues to cuts
+app/memory.py       gc + malloc_trim between jobs; clean restart above RECYCLE_MEMORY_FRACTION of the limit
 app/state.py        sqlite at $STATE_DIR/whisper-sub-gen.db, keyed on path; skip if same size+mtime and
                     done/skipped; pipeline version + fingerprint of the sub we wrote + qa score
 app/api.py          /healthz /metrics (no auth); /status /history /scan /process DELETE /history (API_KEY if set)
