@@ -97,8 +97,8 @@ our own .srt also counts as an external sub. Prod values live in `../homelab/app
 `large-v3-turbo`, `WHISPER_DEVICE=cuda` + `int8_float16` on one GPU time-slice (the `-cuda` image),
 `REGENERATE_OUTDATED=true`, memory limit 12Gi (safe because of `ASR_CHUNK_S` chunking), `CPU_THREADS=12` (capped so Jellyfin transcodes aren't
 starved), `SCAN_INTERVAL_MINUTES=360`, `SHUTDOWN_MODE=abort`, and no `WORK_WINDOW`. There is no
-`API_KEY` yet (the secretRef is commented out, waiting on a SealedSecret). `ingressroute.yaml` exists
-but is not enabled in kustomization. In-cluster callers use
+`API_KEY` yet (the secretRef is commented out, waiting on a SealedSecret). There is no ingress: the
+API is cluster-internal only (the unused IngressRoute was removed 2026-09-24). In-cluster callers use
 `http://whisper-sub-gen.whisper-sub-gen.svc.cluster.local:8000`.
 
 ## Release -> deploy loop
