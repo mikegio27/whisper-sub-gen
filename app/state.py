@@ -13,13 +13,22 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Columns added after the first release, as complete literal DDL statements.
+# SQLite can't bind identifiers or types as parameters, so the statements are
+# spelled out in full instead of being assembled from name/type pieces: no SQL
+# is ever built from a string at runtime.
 _ADDED_COLUMNS = (
-    ("pipeline", "INTEGER NOT NULL DEFAULT 0"),  # transcriber.PIPELINE_VERSION
-    ("sub_size", "INTEGER"),  # the .srt we wrote, to recognise it later
-    ("sub_mtime", "REAL"),
-    ("qa_violations", "REAL"),  # qa.score()["violations_per_100"]
-    ("qa_json", "TEXT"),  # full qa.score() dict
-    ("regen_attempts", "INTEGER NOT NULL DEFAULT 0"),  # failed regenerations since last success
+    # transcriber.PIPELINE_VERSION
+    ("pipeline", "ALTER TABLE files ADD COLUMN pipeline INTEGER NOT NULL DEFAULT 0"),
+    # the .srt we wrote, to recognise it later
+    ("sub_size", "ALTER TABLE files ADD COLUMN sub_size INTEGER"),
+    ("sub_mtime", "ALTER TABLE files ADD COLUMN sub_mtime REAL"),
+    # qa.score()["violations_per_100"]
+    ("qa_violations", "ALTER TABLE files ADD COLUMN qa_violations REAL"),
+    # full qa.score() dict
+    ("qa_json", "ALTER TABLE files ADD COLUMN qa_json TEXT"),
+    # failed regenerations since last success
+    ("regen_attempts", "ALTER TABLE files ADD COLUMN regen_attempts INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -60,9 +69,9 @@ class StateStore:
             # Added with pipeline v1. ALTER in place so an existing prod db
             # keeps its history; old rows read as pipeline 0 (raw whisper).
             have = {r["name"] for r in self._conn.execute("PRAGMA table_info(files)")}
-            for name, decl in _ADDED_COLUMNS:
+            for name, ddl in _ADDED_COLUMNS:
                 if name not in have:
-                    self._conn.execute(f"ALTER TABLE files ADD COLUMN {name} {decl}")
+                    self._conn.execute(ddl)
             self._conn.commit()
 
     def lookup(self, path: str) -> sqlite3.Row | None:
