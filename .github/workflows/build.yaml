@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -59,7 +59,7 @@ jobs:
               type=sha,format=short,suffix=-cuda
               type=raw,value=cuda,enable={{is_default_branch}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The CUDA image carries torch cu129 (~4 GB compressed, ~8 GB unpacked
       # with CTranslate2's cuBLAS). A stock runner has ~14 GB free, which a
