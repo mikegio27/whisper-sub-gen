@@ -1,7 +1,7 @@
 fastapi~=0.115
 uvicorn~=0.34
 pydantic-settings~=2.7
-faster-whisper~=1.1
+faster-whisper~=1.2
 prometheus-client~=0.21
 # Forced aligner (app/align.py). torch itself comes from the PyTorch index in
 # the Dockerfile (cu129 / cpu), before this file.
