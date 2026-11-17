@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # WITH_CUDA=true builds the GPU image: torch from the cu129 index, which also
 # brings the cuBLAS/cuDNN user-space libs CTranslate2 needs. CUDA 12.9 runs on
